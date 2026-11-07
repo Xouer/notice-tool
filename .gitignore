@@ -8,3 +8,9 @@
 # 系统文件
 Thumbs.db
 .DS_Store
+node_modules
+
+# 构建产物与测试输出
+dist/
+coverage/
+
