@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import {
-  notificationChannels,
-  notificationRecords,
-  type ChannelType,
-} from "./schema.js";
+import { notificationChannels, notificationRecords, type ChannelType } from "./schema.js";
 
 import type { NoticeDatabase } from "./db.js";
 import type { BlobCipher } from "./crypto.js";
@@ -40,11 +36,7 @@ export class ChannelRepository {
     this.#cipher = cipher;
   }
 
-  create(input: {
-    type: string;
-    name: string;
-    credentials: unknown;
-  }): ChannelRow {
+  create(input: { type: string; name: string; credentials: unknown }): ChannelRow {
     const validated = validateChannelInput(input.type, input.name, input.credentials);
     const now = new Date();
     const id = randomUUID();
@@ -64,7 +56,7 @@ export class ChannelRepository {
     } catch (cause) {
       if (cause instanceof Error && cause.message.includes("UNIQUE")) {
         throw new ChannelConfigError(
-          `同名渠道已存在（同 type 内唯一）：${validated.name}（${validated.type}）`,
+          `同名渠道已存在（同 type 内唯一）：${validated.name}（${validated.type}）——请换一个名称，或使用 \`notice channel update ${validated.name}\` 修改既有渠道`,
         );
       }
       throw cause;
@@ -107,6 +99,43 @@ export class ChannelRepository {
       .run();
   }
 
+  /**
+   * 改名（004-FR-004）：同 type 内重名预检（排除自身 id）→ 更新 name + updatedAt。
+   * 名称规则与 validateChannelInput 同源：非空、trim、长度 ≤ 64 字符（FR-009/004 契约）。
+   * 仅更新 name/updatedAt；id/type/enabled/credentials_blob 不变（data-model 不变量 3）。
+   */
+  rename(id: string, newName: string): ChannelRow {
+    const row = this.#db
+      .select()
+      .from(notificationChannels)
+      .where(eq(notificationChannels.id, id))
+      .get() as typeof notificationChannels.$inferSelect | undefined;
+    if (row === undefined) {
+      throw new ChannelConfigError("渠道不存在");
+    }
+    const trimmed = typeof newName === "string" ? newName.trim() : "";
+    if (trimmed.length === 0) {
+      throw new ChannelConfigError("渠道名称不能为空");
+    }
+    if (trimmed.length > 64) {
+      throw new ChannelConfigError("渠道名称长度 ≤ 64 字符");
+    }
+    if (trimmed !== row.name) {
+      const clash = this.list().find(
+        (r) => r.type === row.type && r.name === trimmed && r.id !== id,
+      );
+      if (clash !== undefined) {
+        throw new ChannelConfigError(`同名渠道已存在（同 type 内唯一）：${trimmed}（${row.type}）`);
+      }
+    }
+    this.#db
+      .update(notificationChannels)
+      .set({ name: trimmed, updatedAt: new Date() })
+      .where(eq(notificationChannels.id, id))
+      .run();
+    return this.get(id)!;
+  }
+
   updateCredentials(id: string, credentials: unknown): ChannelRow {
     const row = this.#db
       .select()
@@ -138,10 +167,7 @@ export class ChannelRepository {
     if (row === undefined) {
       throw new ChannelConfigError("渠道不存在");
     }
-    return JSON.parse(this.#cipher.unseal(row.credentialsBlob)) as Record<
-      string,
-      unknown
-    >;
+    return JSON.parse(this.#cipher.unseal(row.credentialsBlob)) as Record<string, unknown>;
   }
 
   /** 删除渠道：先置空历史记录外键，再物理清除渠道行与凭据密文。 */
@@ -151,16 +177,14 @@ export class ChannelRepository {
       .set({ channelId: null, updatedAt: new Date() })
       .where(eq(notificationRecords.channelId, id))
       .run();
-    this.#db
-      .delete(notificationChannels)
-      .where(eq(notificationChannels.id, id))
-      .run();
+    this.#db.delete(notificationChannels).where(eq(notificationChannels.id, id)).run();
   }
 
   #toRow(row: typeof notificationChannels.$inferSelect): ChannelRow {
-    const credentials = JSON.parse(
-      this.#cipher.unseal(row.credentialsBlob),
-    ) as Record<string, unknown>;
+    const credentials = JSON.parse(this.#cipher.unseal(row.credentialsBlob)) as Record<
+      string,
+      unknown
+    >;
     return {
       id: row.id,
       type: row.type,
