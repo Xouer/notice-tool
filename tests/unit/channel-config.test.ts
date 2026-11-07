@@ -50,6 +50,17 @@ describe("channel config validation / 渠道配置校验（T016）", () => {
     ).toThrow(ChannelConfigError);
   });
 
+  it("feishu app 模式 receiveIdType 支持 union_id（同一开发者跨应用通用，003 真机验证新增）", () => {
+    const validated = validateChannelInput("feishu", "跨应用", {
+      mode: "app",
+      appId: "cli_a1b2c3d4e5f6",
+      appSecret: "secret",
+      receiveIdType: "union_id",
+      receiveId: "on_7b1183a619961db1668e9fa651a71b91",
+    });
+    expect(validated.credentials).toMatchObject({ receiveIdType: "union_id" });
+  });
+
   it("name 非空且长度 ≤ 64", () => {
     expect(() =>
       validateChannelInput("feishu", "   ", { webhookUrl: FEISHU_WEBHOOK }),
@@ -178,9 +189,9 @@ describe("feishu app-mode credentials / 飞书应用凭证模式（002-T002）",
     }
   });
 
-  it("receiveIdType 枚举 chat_id|open_id|user_id|email：非法值拒绝", () => {
+  it("receiveIdType 枚举 chat_id|open_id|user_id|union_id|email：非法值拒绝", () => {
     expect(() =>
-      validateChannelInput("feishu", "a", appCredentials({ receiveIdType: "union_id" })),
+      validateChannelInput("feishu", "a", appCredentials({ receiveIdType: "wechat_id" })),
     ).toThrow(ChannelConfigError);
     expect(() =>
       validateChannelInput("feishu", "a", appCredentials({ receiveIdType: "open_id" })),

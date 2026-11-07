@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { Command, CommanderError } from "commander";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Readable } from "node:stream";
 import { loadConfig, type NoticeConfig } from "../config/loader.js";
 import { openFileDatabase, type NoticeDatabase } from "../storage/db.js";
@@ -28,6 +28,7 @@ import { registerServeCommand } from "./serve.js";
 import { registerWatchCommand } from "./watch.js";
 import { registerMcpCommand } from "./mcp.js";
 import { registerHistoryCommands } from "./history.js";
+import type { WizardIO } from "./wizard-io.js";
 import { CliFailure } from "./cli-failure.js";
 
 /**
@@ -45,6 +46,8 @@ export interface CliRunOptions {
   err?: (s: string) => void;
   /** stdin 注入接缝（notice hook 读取负载）。 */
   stdin?: Readable;
+  /** 向导 IO 注入接缝（T012，测试用；未注入时按需构造真实终端 IO）。 */
+  wizardIO?: WizardIO;
 }
 
 export interface CliContext {
@@ -54,6 +57,8 @@ export interface CliContext {
   out: (s: string) => void;
   err: (s: string) => void;
   stdin?: Readable;
+  /** 交互式配置向导 IO（channel add 分派使用；测试注入接缝）。 */
+  wizardIO?: WizardIO;
 }
 
 /** 数据目录：NOTICE_DATA_DIR 环境变量优先（测试接缝），否则 %APPDATA%/notice-tool。 */
@@ -191,6 +196,7 @@ export async function runCli(argv: string[], opts: CliRunOptions = {}): Promise<
     out,
     err,
     stdin: opts.stdin,
+    wizardIO: opts.wizardIO,
   });
 
   program
@@ -253,10 +259,17 @@ export async function runCli(argv: string[], opts: CliRunOptions = {}): Promise<
   }
 }
 
-// 直接执行（bin）时运行真实 CLI
+// 直接执行（bin）时运行真实 CLI。
+// Windows 下 npm link 生成符号链接：argv[1] 为链接路径而 import.meta.url 为真实路径，
+// 两侧均经 realpath 归一后再比较（否则全局命令静默不执行）。
 if (process.argv[1] !== undefined) {
-  const invoked = pathToFileURL(process.argv[1]).href;
-  if (import.meta.url === invoked) {
-    process.exitCode = await runCli(process.argv.slice(2));
+  try {
+    const invoked = pathToFileURL(realpathSync(process.argv[1])).href;
+    const self = pathToFileURL(realpathSync(fileURLToPath(import.meta.url))).href;
+    if (invoked === self) {
+      process.exitCode = await runCli(process.argv.slice(2));
+    }
+  } catch {
+    // 路径解析失败（如文件不存在）→ 非 CLI 直执行场景，保持静默
   }
 }

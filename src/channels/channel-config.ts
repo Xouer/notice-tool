@@ -99,6 +99,7 @@ export function validateChannelInput(
             "chat_id",
             "open_id",
             "user_id",
+            "union_id",
             "email",
           ]),
           receiveId: requireString(raw, "receiveId"),

@@ -198,7 +198,7 @@ describe("feishu app-mode CLI flags / 飞书应用凭证 CLI 标志（002-T003�
     const { code } = await cli([
       "channel", "add", "feishu", "--name", "x", "--mode", "app",
       "--app-id", APP_ID, "--app-secret", APP_SECRET,
-      "--receive-id-type", "union_id", "--receive-id", RECEIVE_ID,
+      "--receive-id-type", "wechat_id", "--receive-id", RECEIVE_ID,
     ]);
     expect(code).toBe(2);
   });
