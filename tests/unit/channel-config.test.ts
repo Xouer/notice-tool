@@ -130,6 +130,107 @@ describe("channel config validation / 渠道配置校验（T016）", () => {
   });
 });
 
+describe("feishu app-mode credentials / 飞书应用凭证模式（002-T002）", () => {
+  const APP_ID = "cli_a1b2c3d4e5f6";
+  const APP_SECRET = "feishu-app-secret-9876543210";
+  const RECEIVE_ID = "oc_1234567890abcdef";
+
+  function appCredentials(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      mode: "app",
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      receiveIdType: "chat_id",
+      receiveId: RECEIVE_ID,
+      ...overrides,
+    };
+  }
+
+  it("mode=app 合法凭据通过且保留全部字段", () => {
+    const validated = validateChannelInput("feishu", "应用凭证", appCredentials());
+    expect(validated.credentials).toEqual({
+      schemaVersion: 1,
+      mode: "app",
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      receiveIdType: "chat_id",
+      receiveId: RECEIVE_ID,
+    });
+  });
+
+  it("mode 枚举 app|webhook：非法值拒绝", () => {
+    expect(() =>
+      validateChannelInput("feishu", "a", appCredentials({ mode: "bot" })),
+    ).toThrow(ChannelConfigError);
+  });
+
+  it("mode=app 缺任一必填字段（appId/appSecret/receiveIdType/receiveId）→ 拒绝且提示字段名", () => {
+    for (const field of ["appId", "appSecret", "receiveIdType", "receiveId"]) {
+      const broken = appCredentials();
+      delete broken[field];
+      try {
+        validateChannelInput("feishu", "a", broken);
+        expect.unreachable(`缺少 ${field} 应当拒绝`);
+      } catch (cause) {
+        expect(cause).toBeInstanceOf(ChannelConfigError);
+        expect((cause as Error).message).toContain(field);
+      }
+    }
+  });
+
+  it("receiveIdType 枚举 chat_id|open_id|user_id|email：非法值拒绝", () => {
+    expect(() =>
+      validateChannelInput("feishu", "a", appCredentials({ receiveIdType: "union_id" })),
+    ).toThrow(ChannelConfigError);
+    expect(() =>
+      validateChannelInput("feishu", "a", appCredentials({ receiveIdType: "open_id" })),
+    ).not.toThrow();
+  });
+
+  it("mode 缺省视为 webhook（旧数据零迁移）：缺 webhookUrl 时仍拒绝", () => {
+    expect(() => validateChannelInput("feishu", "a", { appId: APP_ID })).toThrow(
+      ChannelConfigError,
+    );
+    expect(() =>
+      validateChannelInput("feishu", "a", { webhookUrl: FEISHU_WEBHOOK }),
+    ).not.toThrow();
+  });
+
+  it("mode=app 时未校验 webhookUrl；mode=webhook 时未要求 app 字段（互斥）", () => {
+    // app 模式不需要 webhookUrl
+    expect(() => validateChannelInput("feishu", "a", appCredentials())).not.toThrow();
+    // webhook 模式不需要 app 字段（既有行为不变）
+    expect(() =>
+      validateChannelInput("feishu", "a", { mode: "webhook", webhookUrl: FEISHU_WEBHOOK }),
+    ).not.toThrow();
+  });
+
+  it("summarizeCredentials app 模式：appId/receiveId 掩码，appSecret 原文不可见", () => {
+    const summary = summarizeCredentials("feishu", appCredentials());
+    expect(summary).not.toContain(APP_SECRET);
+    expect(summary).not.toContain(APP_ID);
+    expect(summary).not.toContain(RECEIVE_ID);
+    expect(summary).toContain("→");
+  });
+
+  it("summarizeCredentials app 模式字段缺失时输出 *** 兜底", () => {
+    expect(summarizeCredentials("feishu", { mode: "app" })).toBe("***");
+  });
+
+  it("app 模式凭据入库后 getCredentials 解密往返保留原结构", () => {
+    const { repo } = makeRepo();
+    const ch = repo.create({
+      type: "feishu",
+      name: "应用凭证",
+      credentials: appCredentials(),
+    });
+    expect(repo.getCredentials(ch.id)).toEqual({
+      schemaVersion: 1,
+      ...appCredentials(),
+    });
+  });
+});
+
 describe("channel repository / 渠道仓储（T016 存储语义）", () => {
   it("enabled 默认 false；凭据以密文入库（raw blob 不含明文）", () => {
     const { db, repo } = makeRepo();

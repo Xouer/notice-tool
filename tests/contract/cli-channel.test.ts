@@ -136,3 +136,89 @@ describe("CLI channel subcommands / 渠道子命令契约（T017）", () => {
     expect(code).toBe(0);
   });
 });
+
+describe("feishu app-mode CLI flags / 飞书应用凭证 CLI 标志（002-T003）", () => {
+  const APP_ID = "cli_a1b2c3d4e5f6";
+  const APP_SECRET = "feishu-app-secret-9876543210";
+  const RECEIVE_ID = "oc_1234567890abcdef";
+
+  function addArgs(name: string, extra: string[] = []): string[] {
+    return [
+      "channel",
+      "add",
+      "feishu",
+      "--name",
+      name,
+      "--mode",
+      "app",
+      "--app-id",
+      APP_ID,
+      "--app-secret",
+      APP_SECRET,
+      "--receive-id-type",
+      "chat_id",
+      "--receive-id",
+      RECEIVE_ID,
+      ...extra,
+    ];
+  }
+
+  it("add feishu --mode app 成功退出码 0；list 掩码且不含 appSecret 原文", async () => {
+    const added = await cli(addArgs("应用凭证"));
+    expect(added.code).toBe(0);
+
+    const listed = await cli(["channel", "list", "--json"]);
+    expect(listed.code).toBe(0);
+    const parsed = JSON.parse(listed.out.trim()) as {
+      channels: Array<{ name: string; type: string; credentials: string }>;
+    };
+    expect(parsed.channels).toHaveLength(1);
+    expect(parsed.channels[0]?.credentials).not.toContain(APP_SECRET);
+    expect(listed.out).not.toContain(APP_SECRET);
+    expect(listed.out).not.toContain(RECEIVE_ID);
+  });
+
+  it("缺 --receive-id-type / --receive-id → 退出码 2 且提示对应标志名", async () => {
+    const missingType = await cli([
+      "channel", "add", "feishu", "--name", "x", "--mode", "app",
+      "--app-id", APP_ID, "--app-secret", APP_SECRET, "--receive-id", RECEIVE_ID,
+    ]);
+    expect(missingType.code).toBe(2);
+    expect(`${missingType.out}${missingType.errOut}`).toContain("receiveIdType");
+
+    const missingId = await cli([
+      "channel", "add", "feishu", "--name", "x", "--mode", "app",
+      "--app-id", APP_ID, "--app-secret", APP_SECRET, "--receive-id-type", "chat_id",
+    ]);
+    expect(missingId.code).toBe(2);
+    expect(`${missingId.out}${missingId.errOut}`).toContain("receiveId");
+  });
+
+  it("非法 --receive-id-type → 退出码 2", async () => {
+    const { code } = await cli([
+      "channel", "add", "feishu", "--name", "x", "--mode", "app",
+      "--app-id", APP_ID, "--app-secret", APP_SECRET,
+      "--receive-id-type", "union_id", "--receive-id", RECEIVE_ID,
+    ]);
+    expect(code).toBe(2);
+  });
+
+  it("缺 --mode 时 feishu 仍按 webhook 校验（既有行为零回归）", async () => {
+    const { code } = await cli(["channel", "add", "feishu", "--name", "旧方式", "--webhook-url", WEBHOOK]);
+    expect(code).toBe(0);
+  });
+
+  it("--app-id/--app-secret 对 QQ 渠道既有用法无回归", async () => {
+    const { code } = await cli([
+      "channel", "add", "qq", "--name", "qq-bot", "--mode", "official",
+      "--app-id", "qq-app-id", "--app-secret", "qq-app-secret",
+      "--endpoint", "https://api.qq.example/channels/1/messages",
+    ]);
+    expect(code).toBe(0);
+  });
+
+  it("--mode 非法值 → 退出码 2", async () => {
+    const { code } = await cli(addArgs("x", ["--mode", "bot"]));
+    expect(code).toBe(2);
+  });
+});

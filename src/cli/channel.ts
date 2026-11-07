@@ -24,19 +24,21 @@ export function registerChannelCommands(
     .description("添加渠道（凭据即时加密入库，默认未启用）")
     .argument("<type>", "渠道类型：feishu|dingtalk|email|wechat|qq")
     .requiredOption("--name <name>", "渠道名称")
-    .option("--webhook-url <url>", "Webhook 地址（feishu/dingtalk/wechat）")
+    .option("--webhook-url <url>", "Webhook 地址（feishu webhook 模式/dingtalk/wechat）")
     .option("--secret <secret>", "钉钉加签密钥（可选）")
-    .option("--mode <mode>", "wechat/qq 模式：webhook|push / official|push")
+    .option("--mode <mode>", "连接模式：feishu 为 app|webhook（缺省 webhook）；wechat 为 webhook|push；qq 为 official|push")
     .option("--push-key <key>", "Server酱/PushPlus 推送密钥")
     .option("--service <service>", "推送服务：serverchan|pushplus")
+    .option("--receive-id-type <type>", "飞书接收目标类型（--mode app 必填）：chat_id|open_id|user_id|email")
+    .option("--receive-id <id>", "飞书接收目标标识（--mode app 必填），如群会话 ID oc_xxx")
     .option("--smtp-host <host>", "SMTP 主机")
     .option("--smtp-port <port>", "SMTP 端口（默认 465）")
     .option("--username <user>", "SMTP 用户名")
     .option("--auth-code <code>", "SMTP 授权码")
     .option("--from <from>", "发件地址")
     .option("--to <to>", "收件地址")
-    .option("--app-id <id>", "QQ 机器人 AppID")
-    .option("--app-secret <secret>", "QQ 机器人 AppSecret")
+    .option("--app-id <id>", "QQ / 飞书（--mode app）应用 AppID")
+    .option("--app-secret <secret>", "QQ / 飞书（--mode app）应用 AppSecret")
     .option("--endpoint <url>", "QQ 消息接口地址")
     .action((type: string, opts: Record<string, string | undefined>) => {
       const ctx = makeContext();
@@ -191,6 +193,8 @@ function buildCredentials(
   put("webhookUrl", opts.webhookUrl);
   put("secret", opts.secret);
   put("mode", opts.mode);
+  put("receiveIdType", opts.receiveIdType);
+  put("receiveId", opts.receiveId);
   put("pushKey", opts.pushKey);
   put("service", opts.service);
   put("smtpHost", opts.smtpHost);

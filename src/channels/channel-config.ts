@@ -86,9 +86,34 @@ export function validateChannelInput(
 
   let credentials: Record<string, unknown>;
   switch (type as ChannelType) {
-    case "feishu":
-      credentials = { webhookUrl: requireWebhookUrl(raw, "webhookUrl") };
+    case "feishu": {
+      // 连接模式（002-FR-101/FR-104）：app=应用凭证（app_id+app_secret+接收目标）；
+      // webhook=群机器人。mode 缺省视为 webhook（research.md R6：旧数据零迁移）。
+      const mode = optionalString(raw, "mode") ?? "webhook";
+      if (mode === "app") {
+        credentials = {
+          mode,
+          appId: requireString(raw, "appId"),
+          appSecret: requireString(raw, "appSecret"),
+          receiveIdType: requireEnum(raw.receiveIdType, "receiveIdType", [
+            "chat_id",
+            "open_id",
+            "user_id",
+            "email",
+          ]),
+          receiveId: requireString(raw, "receiveId"),
+        };
+      } else if (mode === "webhook") {
+        credentials =
+          raw.mode === undefined
+            ? // 旧结构（无 mode 字段）保持原样输出，避免既有凭据往返变形
+              { webhookUrl: requireWebhookUrl(raw, "webhookUrl") }
+            : { mode, webhookUrl: requireWebhookUrl(raw, "webhookUrl") };
+      } else {
+        throw new ChannelConfigError("凭据字段 mode 必须为 app|webhook 之一");
+      }
       break;
+    }
     case "dingtalk": {
       const dingtalk: Record<string, unknown> = {
         webhookUrl: requireWebhookUrl(raw, "webhookUrl"),
@@ -168,7 +193,15 @@ export function summarizeCredentials(
   const str = (key: string): string =>
     typeof credentials[key] === "string" ? String(credentials[key]) : "";
   switch (type) {
-    case "feishu":
+    case "feishu": {
+      // app 模式摘要：appId 掩码 → receiveId 掩码（appSecret 永不出现，002-FR-106）
+      if (credentials.mode === "app") {
+        const appId = str("appId");
+        if (appId === "") return "***";
+        return `${maskSecret(appId)} → ${maskSecret(str("receiveId"))}`;
+      }
+      return str("webhookUrl") === "" ? "***" : maskSecret(str("webhookUrl"));
+    }
     case "dingtalk":
       return str("webhookUrl") === "" ? "***" : maskSecret(str("webhookUrl"));
     case "email":
