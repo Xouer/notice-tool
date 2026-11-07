@@ -1,0 +1,10 @@
+# CodeBuddy 本地数据（不应提交）
+.codebuddy/
+
+# IDE
+.idea/
+.vscode/
+
+# 系统文件
+Thumbs.db
+.DS_Store
