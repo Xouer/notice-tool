@@ -77,6 +77,16 @@ notice channel add feishu --name legacy --webhook-url "https://open.feishu.cn/op
 
 飞书应用凭证方式从创建应用到测试送达的完整步骤见 [specs/002-feishu-app-credential/quickstart.md](specs/002-feishu-app-credential/quickstart.md)。
 
+## AI 对话框任务完成通知（CodeBuddy / Claude Code / Codex CLI）
+
+把 AI 编程助手对话框里的多步骤 Agent 任务结束事件接入通知管线（优先钩子、巡检兜底、MCP 补充）：
+
+- **CodeBuddy**：在 `~/.codebuddy/settings.json` 配置 `Stop` 钩子 → `notice hook --source codebuddy`。
+- **Claude Code**：`Stop` 钩子 → `notice hook --source claude-code`，或启用现有 `claude-code` 巡检适配器。
+- **Codex CLI**：`~/.codex/config.toml` 配置 `notify = ["notice", "hook", "--source", "codex-cli", "--payload-argv"]`，或启用 `codex-cli` 巡检适配器。
+
+> 单轮简单问答不触发通知；仅多步骤 Agent 任务整体结束（成功/失败/中断）通知一次。MCP 兜底依赖 Agent 主动调用，可靠性弱于钩子/巡检，可能漏报。完整步骤与排查见 [specs/005-ai-task-dialog-link/quickstart.md](specs/005-ai-task-dialog-link/quickstart.md)。
+
 ## 安全说明
 
 - 渠道凭据（含 `App Secret`）加密存储于本地，日志、错误信息与导出数据中一律脱敏。
