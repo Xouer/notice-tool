@@ -9,7 +9,8 @@
 
 export type PollingAdapterConfig =
   | string
-  | { name: "generic-file"; path: string; completionPattern: string };
+  | { name: "generic-file"; path: string; completionPattern: string }
+  | { name: "codex-cli"; sessionsDir?: string };
 
 export interface NoticeConfig {
   schemaVersion: number;
@@ -73,6 +74,15 @@ function validateAdapters(adapters: PollingAdapterConfig[]): void {
       }
       continue;
     }
+    if (adapter !== null && typeof adapter === "object" && adapter.name === "codex-cli") {
+      if (
+        adapter.sessionsDir !== undefined &&
+        (typeof adapter.sessionsDir !== "string" || adapter.sessionsDir.trim().length === 0)
+      ) {
+        throw new ConfigError("codex-cli 适配器 sessionsDir 必须为非空字符串");
+      }
+      continue;
+    }
     if (
       typeof adapter === "object" &&
       adapter !== null &&
@@ -95,7 +105,7 @@ function validateAdapters(adapters: PollingAdapterConfig[]): void {
       continue;
     }
     throw new ConfigError(
-      "polling.adapters 条目必须为适配器注册名（字符串）或 generic-file 配置块",
+      "polling.adapters 条目必须为适配器注册名（字符串）或 generic-file/codex-cli 配置块",
     );
   }
 }
