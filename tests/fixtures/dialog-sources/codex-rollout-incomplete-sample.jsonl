@@ -1,0 +1,2 @@
+{"timestamp":"2026-11-07T10:05:00.000Z","type":"session_meta","session_id":"fixture-thread-codex-0002","cwd":"C:\\fake\\project"}
+{"timestamp":"2026-11-07T10:05:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"fixture：另一个虚构任务仍在进行中"}}

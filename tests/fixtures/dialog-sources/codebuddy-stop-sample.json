@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "fixture-session-codebuddy-0001",
+  "transcript_path": "C:\\fake\\path\\fixture-transcript.jsonl",
+  "stop_hook_active": false
+}
