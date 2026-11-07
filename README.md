@@ -1,4 +1,5 @@
 # notice-tool
+
 Agent Task Completion Notification/本地常驻的智能体任务完成通知工具
 
 本地 AI 编程智能体的对话任务结束后，第一时间把完成通知送达你的飞书、钉钉、邮箱、微信、QQ。支持钩子触发、状态巡查与 MCP 接入。
@@ -7,6 +8,7 @@ Agent Task Completion Notification/本地常驻的智能体任务完成通知工
 
 ```bash
 notice channel add <type> --name <name> [凭据标志...]
+notice channel update <name> [凭据标志...]   # 修改既有渠道（部分更新）
 notice channel test <name>   # 测试发送，成功后自动启用
 notice channel list          # 凭据一律掩码显示
 ```
@@ -16,6 +18,31 @@ notice channel list          # 凭据一律掩码显示
 直接运行 `notice channel add`（不带参数），工具会分步引导完成配置：**选择渠道类型 → 选择连接方式 → 逐项输入凭据**（每项附含义、格式示例与获取方法提示，敏感值输入不回显明文）→ 确认摘要后保存。也可用 `notice channel add feishu --interactive` 强制进入向导（已给类型时跳过第一步）。
 
 > 脚本/CI 等非交互环境请使用下方命令行标志方式；`--json` 模式不会弹出向导。端到端验证步骤见 [specs/003-interactive-credential-setup/quickstart.md](specs/003-interactive-credential-setup/quickstart.md)。
+
+### 修改渠道配置
+
+凭据轮换（如更换 `App Secret`、SMTP 授权码）无需删除重建，一条命令完成部分更新——未提供的字段保留原值：
+
+```bash
+notice channel update my-feishu --app-secret "新Secret"      # 仅轮换 App Secret
+notice channel update my-feishu --name feishu-project        # 改名（启用状态与历史记录保留）
+notice channel update my-feishu --mode webhook --webhook-url "https://..."  # 切换连接方式
+notice channel update dd --secret ""                         # 可选字段传空值即清除
+```
+
+- 修改后启用状态不变；校验失败或改名冲突时原配置零改动。
+- 交互终端运行 `notice channel update <name>`（不带标志）会进入修改向导：当前值预填、敏感项回车保留。
+
+### 同类型多条配置
+
+同一渠道类型支持多条配置，以名称区分（如飞书同时发项目群与个人、两个不同收件邮箱），各条独立启用/测试/修改/删除，通知会发送到所有已启用渠道：
+
+```bash
+notice channel add email --name work-mail --smtp-host smtp.qq.com --auth-code "xxx" --to me@work.com
+notice channel add email --name personal-mail --smtp-host smtp.163.com --auth-code "yyy" --to me@163.com
+```
+
+> 同 type 内名称唯一；不同类型之间名称可重复。重名添加会报错并提示改用 `notice channel update`。
 
 ### 飞书：两种连接方式
 
