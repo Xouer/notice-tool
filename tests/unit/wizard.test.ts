@@ -87,9 +87,7 @@ describe("wizard engine: fields step/逐字段输入（T003，US1）", () => {
     await runWizard(io, { type: "feishu" });
     expect(io.printed.some((l) => l.includes("App ID") && l.includes("cli_"))).toBe(true);
     expect(
-      io.printed.some(
-        (l) => l.includes("接收目标 ID") && (l.includes("oc_") || l.includes("ou_")),
-      ),
+      io.printed.some((l) => l.includes("接收目标 ID") && (l.includes("oc_") || l.includes("ou_"))),
     ).toBe(true);
   });
 
@@ -235,6 +233,153 @@ describe("wizard engine: navigation, defaults, cancel（T006，US2）", () => {
       { kind: "cancel" }, // App Secret 输入中途取消
     ]);
     const outcome = await runWizard(io, { type: "feishu" });
+    expect(outcome).toEqual({ action: "cancel" });
+  });
+});
+
+// ── 004-T009：update 模式（US3）──
+
+const CURRENT_FEISHU_APP = {
+  name: "my-feishu",
+  credentials: {
+    mode: "app",
+    appId: APP_ID,
+    appSecret: APP_SECRET,
+    receiveIdType: "chat_id",
+    receiveId: RECEIVE_ID,
+  },
+};
+
+describe("wizard update mode: seed & prefill/update 模式预填（004-T009，US3）", () => {
+  it("类型锁定：第 1 步跳过，直接进入方式菜单且当前方式排在首位（预选）", async () => {
+    const io = createFakeWizardIO([
+      { kind: "value", value: 0 }, // 方式：app（当前值在首位）
+      { kind: "value", value: "" }, // name 保留
+      { kind: "value", value: "" }, // appId 保留
+      { kind: "value", value: "" }, // appSecret 保留
+      { kind: "value", value: 0 }, // receiveIdType 保留 chat_id
+      { kind: "value", value: "" }, // receiveId 保留
+      { kind: "value", value: 0 }, // 确认保存
+    ]);
+    await runWizard(io, {
+      mode: "update",
+      type: "feishu",
+      current: CURRENT_FEISHU_APP,
+    });
+    // 类型菜单（同时含 feishu 与 qq）不应出现
+    expect(io.chooseCalls.some((c) => c.labels.includes("feishu") && c.labels.includes("qq"))).toBe(
+      false,
+    );
+    const modeMenu = io.chooseCalls[0];
+    expect(modeMenu?.labels[0]).toBe("app");
+    expect(modeMenu?.hints[0]).toContain("当前");
+  });
+
+  it("字段预填：全部回车保留 → 产物与当前凭据一致（经 validateChannelInput 终验等价）", async () => {
+    const io = createFakeWizardIO([
+      { kind: "value", value: 0 }, // 方式 app
+      { kind: "value", value: "" }, // name
+      { kind: "value", value: "" }, // appId
+      { kind: "value", value: "" }, // appSecret
+      { kind: "value", value: 0 }, // receiveIdType
+      { kind: "value", value: "" }, // receiveId
+      { kind: "value", value: 0 }, // 确认
+    ]);
+    const outcome = await runWizard(io, {
+      mode: "update",
+      type: "feishu",
+      current: CURRENT_FEISHU_APP,
+    });
+    expect(outcome.action).toBe("save");
+    if (outcome.action !== "save") return;
+    expect(outcome.name).toBe("my-feishu");
+    expect(outcome.credentials).toMatchObject({
+      mode: "app",
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      receiveIdType: "chat_id",
+      receiveId: RECEIVE_ID,
+    });
+    expect(validateChannelInput(outcome.type, outcome.name, outcome.credentials)).toBeDefined();
+  });
+
+  it("敏感字段提示“已设置（回车保留）”；摘要脱敏无明文（SC-004）", async () => {
+    const io = createFakeWizardIO([
+      { kind: "value", value: 0 },
+      { kind: "value", value: "" },
+      { kind: "value", value: "" },
+      { kind: "value", value: "" },
+      { kind: "value", value: 0 },
+      { kind: "value", value: "" },
+      { kind: "value", value: 0 },
+    ]);
+    await runWizard(io, { mode: "update", type: "feishu", current: CURRENT_FEISHU_APP });
+    expect(io.secretPrompts.some((p) => p.includes("已设置"))).toBe(true);
+    const printed = io.printed.join("\n");
+    expect(printed).toContain("***");
+    expect(printed).not.toContain(APP_SECRET);
+  });
+
+  it("可改选连接方式：选 webhook 后按新方式字段集收集，产物为纯净新方式凭据", async () => {
+    const io = createFakeWizardIO([
+      { kind: "value", value: 1 }, // 改选 webhook
+      { kind: "value", value: "" }, // name 保留（my-feishu）
+      { kind: "value", value: WEBHOOK }, // webhookUrl（新方式无预填，必填）
+      { kind: "value", value: 0 }, // 确认
+    ]);
+    const outcome = await runWizard(io, {
+      mode: "update",
+      type: "feishu",
+      current: CURRENT_FEISHU_APP,
+    });
+    expect(outcome.action).toBe("save");
+    if (outcome.action !== "save") return;
+    expect(outcome.credentials).toEqual({ mode: "webhook", webhookUrl: WEBHOOK });
+  });
+
+  it("改名：在名称字段输入新名 → 产物携带新名称", async () => {
+    const io = createFakeWizardIO([
+      { kind: "value", value: 0 },
+      { kind: "value", value: "renamed-feishu" }, // 改名
+      { kind: "value", value: "" },
+      { kind: "value", value: "" },
+      { kind: "value", value: 0 },
+      { kind: "value", value: "" },
+      { kind: "value", value: 0 },
+    ]);
+    const outcome = await runWizard(io, {
+      mode: "update",
+      type: "feishu",
+      current: CURRENT_FEISHU_APP,
+    });
+    expect(outcome.action === "save" && outcome.name).toBe("renamed-feishu");
+  });
+
+  it("可选字段清除：输入 - 清除钉钉加签密钥；必填字段无清除提示", async () => {
+    const io = createFakeWizardIO([
+      { kind: "value", value: "dd" }, // name
+      { kind: "value", value: "" }, // webhookUrl 保留
+      { kind: "value", value: "-" }, // secret（可选）→ 清除
+      { kind: "value", value: 0 }, // 确认
+    ]);
+    const outcome = await runWizard(io, {
+      mode: "update",
+      type: "dingtalk",
+      current: { name: "dd", credentials: { webhookUrl: WEBHOOK, secret: "SEC-xyz" } },
+    });
+    expect(outcome.action).toBe("save");
+    if (outcome.action !== "save") return;
+    expect(outcome.credentials.secret).toBeUndefined();
+    expect(outcome.credentials).toMatchObject({ webhookUrl: WEBHOOK });
+  });
+
+  it("取消：首步取消 → cancel 且无任何写入语义产物", async () => {
+    const io = createFakeWizardIO([{ kind: "cancel" }]);
+    const outcome = await runWizard(io, {
+      mode: "update",
+      type: "feishu",
+      current: CURRENT_FEISHU_APP,
+    });
     expect(outcome).toEqual({ action: "cancel" });
   });
 });

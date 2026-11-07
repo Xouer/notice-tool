@@ -1,7 +1,4 @@
-import {
-  CHANNEL_TYPES,
-  type ChannelType,
-} from "../storage/schema.js";
+import { CHANNEL_TYPES, type ChannelType } from "../storage/schema.js";
 import { validateChannelInput } from "../channels/channel-config.js";
 import type { StepResult, WizardIO } from "./wizard-io.js";
 
@@ -27,6 +24,13 @@ export interface WizardSeed {
   type?: ChannelType;
   /** 已有值（如 --name / 校验失败重入），回退保留语义的基础。 */
   values?: Record<string, string>;
+  /**
+   * 向导模式（004 update 向导预留；缺省 "add"）：update 时调用方负责预填语义。
+   * 仅类型声明（可选新增，向后兼容）；行为由调用方与 seed.values 驱动。
+   */
+  mode?: "add" | "update";
+  /** update 模式下的当前渠道值预填来源（004 调用方契约）。 */
+  current?: { name: string; credentials: Record<string, unknown> };
 }
 
 export interface FieldSpec {
@@ -338,12 +342,23 @@ function maskValue(field: FieldSpec, value: string | undefined): string {
 }
 
 export async function runWizard(io: WizardIO, seed: WizardSeed = {}): Promise<WizardOutcome> {
-  const values: Record<string, string> = { ...seed.values };
+  // ── 004-US3：update 模式（类型锁定 + 当前值预填 + 敏感项"已设置"语义）──
+  const isUpdate = seed.mode === "update";
+  const values: Record<string, string> = {};
+  if (isUpdate && seed.current !== undefined) {
+    values.name = seed.current.name;
+    for (const [k, v] of Object.entries(seed.current.credentials)) {
+      if (k === "schemaVersion" || v === null || typeof v === "object") continue;
+      values[k] = String(v);
+    }
+  }
+  for (const [k, v] of Object.entries(seed.values ?? {})) values[k] = v;
   const defaults: string[] = [];
+  const cleared = new Set<string>(); // update 模式：用户显式清除（-）的可选字段
   let type: ChannelType | undefined = seed.type;
 
   for (;;) {
-    // ── 第 1 步：选择输入类型（FR-002）──
+    // ── 第 1 步：选择输入类型（FR-002）；update 模式类型锁定，由 seed.type 跳过 ──
     if (type === undefined) {
       const r = await io.choose(
         "选择输入类型",
@@ -356,15 +371,24 @@ export async function runWizard(io: WizardIO, seed: WizardSeed = {}): Promise<Wi
     const currentType = type as ChannelType; // 上方分支保证已定义
 
     const modes = MODES[currentType];
+    // update 模式：当前方式排在首位（预选语义），提示"当前值"
+    const orderedModes =
+      isUpdate && modes.length > 1
+        ? [...modes].sort((a, b) =>
+            a.key === String(values.mode ?? "") ? -1 : b.key === String(values.mode ?? "") ? 1 : 0,
+          )
+        : modes;
     let mode: ModeSpec;
 
     // ── 第 2 步：选择输入方式（FR-003；单方式渠道跳过）──
-    if (modes.length > 1) {
+    if (orderedModes.length > 1) {
       const r = await io.choose(
         `选择输入方式（${TYPE_LABELS[currentType]}）`,
-        modes.map((m) => ({
+        orderedModes.map((m) => ({
           label: m.key,
-          hint: `${m.recommended ? "推荐：" : ""}${m.label}：${m.hint}`,
+          hint: `${m.recommended ? "推荐：" : ""}${m.label}：${m.hint}${
+            isUpdate && m.key === String(values.mode ?? "") ? "（当前值，可改选）" : ""
+          }`,
         })),
       );
       if (r.kind === "cancel") return { action: "cancel" };
@@ -372,9 +396,9 @@ export async function runWizard(io: WizardIO, seed: WizardSeed = {}): Promise<Wi
         type = undefined; // 返回第 1 步
         continue;
       }
-      mode = modes[r.value]!;
+      mode = orderedModes[r.value]!;
     } else {
-      mode = modes[0]!;
+      mode = orderedModes[0]!;
     }
 
     // ── 第 3 步：逐项输入值（FR-004/FR-005/FR-007）──
@@ -411,10 +435,15 @@ export async function runWizard(io: WizardIO, seed: WizardSeed = {}): Promise<Wi
         }
 
         io.print(`${field.label}：${field.hint}`);
-        const keep = prev !== undefined ? "（回车保留已输入值）" : "";
-        const r = await io.ask(`请输入${field.label}${field.optional ? "（可留空）" : ""}${keep}`, {
-          secret: field.secret,
-        });
+        const keep =
+          prev !== undefined ? (isUpdate ? "（已设置，回车保留）" : "（回车保留已输入值）") : "";
+        const clearNote = isUpdate && field.optional === true ? "；输入 - 清除该字段" : "";
+        const r = await io.ask(
+          `请输入${field.label}${field.optional ? "（可留空）" : ""}${keep}${clearNote}`,
+          {
+            secret: field.secret,
+          },
+        );
         if (r.kind === "cancel") return { action: "cancel" };
         if (r.kind === "back") {
           if (i === 0) break; // 回到选择方式/类型
@@ -423,6 +452,12 @@ export async function runWizard(io: WizardIO, seed: WizardSeed = {}): Promise<Wi
         }
         const raw = r.value.trim();
 
+        if (isUpdate && raw === "-" && field.optional === true) {
+          delete values[field.key];
+          cleared.add(field.key); // 显式清除（摘要标注"已清除"，保存产物不含该键）
+          i += 1;
+          continue;
+        }
         if (raw === "" && prev !== undefined && prev !== "") {
           i += 1; // 空输入保留已输入值
           continue;
@@ -460,6 +495,10 @@ export async function runWizard(io: WizardIO, seed: WizardSeed = {}): Promise<Wi
       );
       for (const field of fields) {
         if (field.key === "name") continue;
+        if (cleared.has(field.key)) {
+          io.print(`${field.label}：（已清除）`);
+          continue;
+        }
         io.print(`${field.label}：${maskValue(field, values[field.key])}`);
       }
       const cr = await io.choose("确认配置", [
