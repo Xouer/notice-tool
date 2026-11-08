@@ -18,11 +18,7 @@ import type { ChannelAdapter } from "../channels/adapter.js";
 import { filterSensitiveSummary } from "./sensitive-filter.js";
 import { isDuplicateEvent } from "./dedup.js";
 import { dispatchEvent, type DispatchRecordResult } from "./dispatcher.js";
-import {
-  formatLocalDateTime,
-  summaryFallback,
-  titleFallback,
-} from "./notification-content.js";
+import { formatLocalDateTime, summaryFallback, titleFallback } from "./notification-content.js";
 import type { PlaceholderValues } from "./template.js";
 
 /**
@@ -44,6 +40,10 @@ export interface NormalizedEvent {
   title?: string;
   /** 008：可选稳定停止事件身份；无键时沿用旧冷却语义。 */
   eventKey?: string;
+  /** 010：可选任务结论（转录最后一条完整 assistant 回复）。 */
+  conclusion?: string;
+  /** 010：可选首条用户消息（任务目标）。 */
+  firstUserMessage?: string;
   finishedAt: Date;
   result: ResultStatus;
   resultSummary?: string;
@@ -182,6 +182,25 @@ export function validateEventPayload(
     }
   }
 
+  // 010：可选任务结论与首条用户消息（概要增强来源；工具自身提取的字段，超长宽容截断）
+  let conclusion: string | undefined;
+  if (body.conclusion !== undefined && body.conclusion !== null) {
+    if (typeof body.conclusion !== "string") {
+      errors.push("字段 conclusion 必须为字符串");
+    } else if (body.conclusion.trim().length > 0) {
+      conclusion = body.conclusion.slice(0, 500);
+    }
+  }
+
+  let firstUserMessage: string | undefined;
+  if (body.firstUserMessage !== undefined && body.firstUserMessage !== null) {
+    if (typeof body.firstUserMessage !== "string") {
+      errors.push("字段 firstUserMessage 必须为字符串");
+    } else if (body.firstUserMessage.trim().length > 0) {
+      firstUserMessage = body.firstUserMessage.slice(0, 500);
+    }
+  }
+
   if (errors.length > 0) {
     throw new EventValidationError(errors);
   }
@@ -190,6 +209,8 @@ export function validateEventPayload(
     taskId: taskId!,
     title,
     eventKey,
+    conclusion,
+    firstUserMessage,
     finishedAt,
     result,
     resultSummary,
@@ -279,7 +300,12 @@ export async function ingestTaskEndEvent(
     source_agent: event.source,
     result_status: event.result,
     finished_at: formatLocalDateTime(event.finishedAt),
-    result_summary: sanitizedSummary ?? summaryFallback(event.result),
+    // 010 概要优先级：resultSummary → 任务结论 → 首条用户消息 → 结果状态兜底
+    result_summary:
+      sanitizedSummary ??
+      filterSensitiveSummary(event.conclusion) ??
+      filterSensitiveSummary(event.firstUserMessage) ??
+      summaryFallback(event.result),
   };
   const records = await dispatchEvent({
     db: deps.db,

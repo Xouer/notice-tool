@@ -1,0 +1,5 @@
+{"type":"ai-title","aiTitle":"修复登录页样式问题","sessionId":"fixture-session-ctx-0001","cwd":"c:/tmp/notice-fixture"}
+{"type":"summary","summary":"帮我修复登录页样式","providerData":{"source":"initial-user-message"},"sessionId":"fixture-session-ctx-0001"}
+{"type":"message","role":"user","content":[{"type":"input_text","text":"帮我修复登录页样式"}],"sessionId":"fixture-session-ctx-0001"}
+{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已定位问题并修复样式，更新了 3 个文件并通过测试"}],"status":"complete","sessionId":"fixture-session-ctx-0001"}
+{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Interrupted by user"}],"status":"incomplete","sessionId":"fixture-session-ctx-0001"}

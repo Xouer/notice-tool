@@ -13,6 +13,7 @@ node_modules
 # 构建产物与测试输出
 dist/
 coverage/
+.vitest/
 
 # 日志与环境变量
 *.log

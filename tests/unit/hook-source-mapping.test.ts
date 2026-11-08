@@ -1,10 +1,14 @@
 import { Readable } from "node:stream";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "../../src/cli/index.js";
-import { mapCodeBuddyStopPayload, mapCodexNotifyPayload } from "../../src/cli/hook.js";
+import {
+  mapCodeBuddyStopPayload,
+  mapCodexNotifyPayload,
+  resolveTranscriptPath,
+} from "../../src/cli/hook.js";
 import { createStableEventKey } from "../../src/core/stop-identity.js";
 import { readFileSync } from "node:fs";
 
@@ -373,7 +377,11 @@ describe("title mapping / 标题字段映射（T006，009-US1）", () => {
     writeFileSync(
       transcript,
       [
-        JSON.stringify({ type: "message", role: "user", content: [{ type: "input_text", text: "帮我修复通知" }] }),
+        JSON.stringify({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "帮我修复通知" }],
+        }),
         JSON.stringify({ type: "topic", topic: "fix task 修复通知格式" }),
       ].join("\n"),
       "utf8",
@@ -398,6 +406,88 @@ describe("title mapping / 标题字段映射（T006，009-US1）", () => {
     expect(mapped.status).toBe("mapped");
     if (mapped.status !== "mapped") return;
     expect(mapped.payload.title).toBeUndefined();
+  });
+
+  it("010：负载无标题/概要时从转录透传 conclusion 与 firstUserMessage", () => {
+    const dir = mkdtempSync(join(tmpdir(), "notice-ctx-map-"));
+    const transcript = join(dir, "session.jsonl");
+    writeFileSync(
+      transcript,
+      [
+        JSON.stringify({
+          type: "summary",
+          summary: "帮我修复通知",
+          providerData: { source: "initial-user-message" },
+        }),
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "已修复并更新 2 个文件" }],
+          status: "complete",
+        }),
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Interrupted by user" }],
+          status: "incomplete",
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    const mapped = mapCodeBuddyStopPayload({
+      session_id: "s-ctx",
+      event_id: "e-ctx",
+      transcript_path: transcript,
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(mapped.status).toBe("mapped");
+    if (mapped.status !== "mapped") return;
+    expect(mapped.payload.title).toBe("帮我修复通知");
+    expect(mapped.payload.conclusion).toBe("已修复并更新 2 个文件");
+    expect(mapped.payload.firstUserMessage).toBe("帮我修复通知");
+  });
+});
+
+describe("transcript locating / 转录定位（010-T010）", () => {
+  let projectsDir: string;
+
+  beforeEach(() => {
+    projectsDir = mkdtempSync(join(tmpdir(), "notice-projects-"));
+  });
+
+  afterEach(() => {
+    rmSync(projectsDir, { recursive: true, force: true });
+  });
+
+  it("transcript_path 显式提供时优先使用", () => {
+    const resolved = resolveTranscriptPath(
+      { transcript_path: "C:/tmp/explicit.jsonl", session_id: "sess-x" },
+      projectsDir,
+    );
+    expect(resolved).toBe("C:/tmp/explicit.jsonl");
+  });
+
+  it("无 transcript_path 时按 session_id 在项目目录匹配 <session_id>.jsonl", () => {
+    mkdirSync(join(projectsDir, "slug-a"), { recursive: true });
+    const transcript = join(projectsDir, "slug-a", "sess-abc123.jsonl");
+    writeFileSync(transcript, "", "utf8");
+    expect(resolveTranscriptPath({ session_id: "sess-abc123" }, projectsDir)).toBe(transcript);
+  });
+
+  it("session_id 含路径分隔符或 .. 时放弃（防路径穿越）", () => {
+    expect(resolveTranscriptPath({ session_id: "../evil" }, projectsDir)).toBeUndefined();
+    expect(resolveTranscriptPath({ session_id: "a\\b" }, projectsDir)).toBeUndefined();
+    expect(resolveTranscriptPath({ session_id: "a..b" }, projectsDir)).toBeUndefined();
+  });
+
+  it("无 session_id 且无 transcript_path 时返回 undefined", () => {
+    expect(resolveTranscriptPath({}, projectsDir)).toBeUndefined();
+  });
+
+  it("项目目录不存在时返回 undefined（不抛错）", () => {
+    expect(
+      resolveTranscriptPath({ session_id: "sess-abc" }, join(projectsDir, "no-such-dir")),
+    ).toBeUndefined();
   });
 });
 

@@ -84,3 +84,78 @@ describe("notification content contract / 通知内容契约（T007/T018）", ()
     expect(lines[5]).toBe("概要：{{result_summary}}");
   });
 });
+
+/**
+ * 010-US2 概要优先级契约测试（Red 先行）：
+ * resultSummary → 任务结论 → 首条用户消息 → 结果状态兜底（contracts/task-context.md）。
+ */
+describe("task context summary priority / 概要优先级（010-US2）", () => {
+  it("来源 resultSummary 优先于任务结论", async () => {
+    const message = await render({
+      schemaVersion: 1,
+      source: "demo",
+      taskId: "t-ctx-1",
+      result: "success",
+      resultSummary: "来源提供的概要",
+      conclusion: "转录中的任务结论",
+    });
+    expect(message).toContain("概要：来源提供的概要");
+  });
+
+  it("无 resultSummary 时概要取任务结论", async () => {
+    const message = await render({
+      schemaVersion: 1,
+      source: "demo",
+      taskId: "t-ctx-2",
+      result: "success",
+      conclusion: "已修复样式并更新 3 个文件",
+    });
+    expect(message).toContain("概要：已修复样式并更新 3 个文件");
+  });
+
+  it("无结论时概要取首条用户消息", async () => {
+    const message = await render({
+      schemaVersion: 1,
+      source: "demo",
+      taskId: "t-ctx-3",
+      result: "success",
+      firstUserMessage: "帮我修复登录页样式",
+    });
+    expect(message).toContain("概要：帮我修复登录页样式");
+  });
+
+  it("均缺失时概要回退结果状态兜底", async () => {
+    const message = await render({
+      schemaVersion: 1,
+      source: "demo",
+      taskId: "t-ctx-4",
+      result: "success",
+    });
+    expect(message).toContain("概要：任务成功完成");
+  });
+
+  it("结论中的敏感信息渲染前脱敏", async () => {
+    const secret = "sk-proj-abc123def456ghi789";
+    const message = await render({
+      schemaVersion: 1,
+      source: "demo",
+      taskId: "t-ctx-5",
+      result: "success",
+      conclusion: `已完成，密钥 ${secret} 已轮换`,
+    });
+    expect(message).not.toContain(secret);
+    expect(message).toContain("[REDACTED]");
+  });
+
+  it("超长结论截断至 500 字符", async () => {
+    const message = await render({
+      schemaVersion: 1,
+      source: "demo",
+      taskId: "t-ctx-6",
+      result: "success",
+      conclusion: "长".repeat(800),
+    });
+    const line = message.split("\n").find((l) => l.startsWith("概要：")) ?? "";
+    expect(line.length).toBeLessThanOrEqual("概要：".length + 500);
+  });
+});

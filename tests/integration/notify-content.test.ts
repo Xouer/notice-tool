@@ -139,3 +139,91 @@ describe("notification content / 通知内容渲染（T013/T015）", () => {
     expect(message).toContain("概要：修复了登录页样式（3 个文件）");
   });
 });
+
+/**
+ * 010-US3 连续任务可区分集成测试：
+ * 同一会话内不同任务（不同事件键/标题/概要）产生可区分通知；不同会话亦然。
+ */
+async function ingestMany(payloads: unknown[]): Promise<string[]> {
+  const db = openMemoryDatabase();
+  seedDefaultTemplates(db);
+  const channels = new ChannelRepository(
+    db,
+    new BlobCipher(new InMemorySecretStore().getMainKey()),
+  );
+  const templates = new TemplateRepository(db);
+  const row = channels.create({
+    type: "feishu",
+    name: "渠道-feishu",
+    credentials: { webhookUrl: "https://x.example/feishu" },
+  });
+  channels.setEnabled(row.id, true);
+  const adapter = new FakeAdapter("feishu");
+  const deps = {
+    db,
+    channels,
+    templates,
+    getAdapter: () => adapter,
+    config: { cooldownMinutes: 10 },
+    dispatchOptions: { maxAttempts: 1, retryDelayMs: 1 },
+  };
+  const messages: string[] = [];
+  for (const payload of payloads) {
+    await ingestTaskEndEvent(deps, payload);
+    messages.push(adapter.sends.at(-1)?.message ?? "");
+  }
+  return messages;
+}
+
+describe("task distinguishability / 连续任务可区分（010-US3）", () => {
+  it("同一会话两个不同任务 → 两条通知标题/概要可区分", async () => {
+    const [first, second] = await ingestMany([
+      {
+        schemaVersion: 1,
+        source: "codebuddy",
+        taskId: "session-shared-001",
+        eventKey: "stop-shared-1",
+        title: "修复登录页样式",
+        conclusion: "已定位问题并修复样式",
+        result: "success",
+      },
+      {
+        schemaVersion: 1,
+        source: "codebuddy",
+        taskId: "session-shared-001",
+        eventKey: "stop-shared-2",
+        title: "补充参数校验",
+        conclusion: "已完成参数校验并更新测试",
+        result: "success",
+      },
+    ]);
+    expect(first).toContain("标题：修复登录页样式");
+    expect(first).toContain("概要：已定位问题并修复样式");
+    expect(second).toContain("标题：补充参数校验");
+    expect(second).toContain("概要：已完成参数校验并更新测试");
+    expect(first).not.toBe(second);
+  });
+
+  it("不同会话任务 → 通知互不混淆", async () => {
+    const [first, second] = await ingestMany([
+      {
+        schemaVersion: 1,
+        source: "codebuddy",
+        taskId: "session-alpha",
+        eventKey: "stop-alpha",
+        title: "任务A",
+        result: "success",
+      },
+      {
+        schemaVersion: 1,
+        source: "codebuddy",
+        taskId: "session-beta",
+        eventKey: "stop-beta",
+        title: "任务B",
+        result: "success",
+      },
+    ]);
+    expect(first).toContain("标题：任务A");
+    expect(second).toContain("标题：任务B");
+  });
+});

@@ -1,10 +1,13 @@
 import type { Command } from "commander";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { EventValidationError } from "../core/event-pipeline.js";
 import { RESULT_STATUSES, type ResultStatus } from "../storage/schema.js";
 import { createIngest } from "./index.js";
 import { resolveStopEventKey } from "../core/stop-identity.js";
-import { readTranscriptTitle } from "../core/transcript-title.js";
+import { readTranscriptContext } from "../core/transcript-title.js";
 import { CliFailure } from "./cli-failure.js";
 import type { CliContext, OpenedStore } from "./index.js";
 
@@ -77,6 +80,37 @@ function optionalResultStatus(value: unknown): ResultStatus | undefined {
 }
 
 /**
+ * 010：定位转录文件——显式 `transcript_path` 优先；缺失时按 `session_id`
+ * 在 `~/.codebuddy/projects/<project-slug>/` 下匹配 `<session_id>.jsonl`。
+ * `session_id` 含路径分隔符等危险字符时直接放弃（防路径穿越）。
+ * `projectsDir` 为注入接缝（测试用）。
+ */
+export function resolveTranscriptPath(
+  body: Record<string, unknown>,
+  projectsDir: string = join(homedir(), ".codebuddy", "projects"),
+): string | undefined {
+  const explicit = optionalNonEmptyString(body.transcript_path);
+  if (explicit !== undefined) return explicit;
+  const sessionId = optionalNonEmptyString(body.session_id);
+  if (sessionId === undefined || /[\\/:*?"<>|]/.test(sessionId) || sessionId.includes("..")) {
+    return undefined;
+  }
+  let slugs: string[];
+  try {
+    slugs = readdirSync(projectsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return undefined;
+  }
+  for (const slug of slugs) {
+    const candidate = join(projectsDir, slug, `${sessionId}.jsonl`);
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
  * CodeBuddy Stop 钩子负载映射（008 contracts/stop-notification.md）：
  * session_id → taskId；缺失时使用 unknown-session；显式 eventKey 或稳定来源身份透传；
  * result/resultSummary/finishedAt 可选，缺失走默认。
@@ -110,19 +144,22 @@ export function mapCodeBuddyStopPayload(
   if (summary !== undefined) {
     payload.resultSummary = summary.slice(0, SUMMARY_MAX_LENGTH);
   }
-  let title =
+  // 010：从转录提取任务上下文（标题兜底、任务结论、首条用户消息）
+  const transcriptPath = resolveTranscriptPath(body);
+  const context = transcriptPath !== undefined ? readTranscriptContext(transcriptPath) : {};
+  const title =
     optionalNonEmptyString(body.title) ??
     optionalNonEmptyString(body.conversation_title) ??
-    optionalNonEmptyString(body.session_title);
-  if (title === undefined) {
-    // 负载无标题字段时，从 transcript_path 转录文件提取标题（custom-title/ai-title/topic/首条用户消息）
-    const transcriptPath = optionalNonEmptyString(body.transcript_path);
-    if (transcriptPath !== undefined) {
-      title = readTranscriptTitle(transcriptPath);
-    }
-  }
+    optionalNonEmptyString(body.session_title) ??
+    context.title;
   if (title !== undefined) {
     payload.title = title.slice(0, TITLE_MAX_LENGTH);
+  }
+  if (context.conclusion !== undefined) {
+    payload.conclusion = context.conclusion.slice(0, SUMMARY_MAX_LENGTH);
+  }
+  if (context.firstUserMessage !== undefined) {
+    payload.firstUserMessage = context.firstUserMessage.slice(0, SUMMARY_MAX_LENGTH);
   }
   payload.finishedAt = optionalIsoTime(body.finishedAt) ?? new Date().toISOString();
   return { status: "mapped", payload, degradedKey: identity.degraded ? true : undefined };
