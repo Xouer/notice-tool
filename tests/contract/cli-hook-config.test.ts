@@ -114,6 +114,30 @@ describe("CLI hook-config commands / hook-config 子命令契约（T010）", () 
     expect(JSON.parse(after.out.trim())).toMatchObject({ status: "valid" });
   });
 
+  it("status 输出四类诊断字段", async () => {
+    await cli(["hook-config", "enable", "windows-codebuddy", "--json"]);
+    const { code, out } = await cli(["hook-config", "status", "windows-codebuddy", "--json"]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out.trim()) as {
+      enabled: boolean;
+      hookValid: string;
+      platformMatches: boolean;
+      recentEvent: { found: boolean };
+      recentNotification: { found: boolean };
+    };
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.hookValid).toBe("valid");
+    expect(parsed.platformMatches).toBe(true);
+    expect(parsed.recentEvent.found).toBe(false);
+    expect(parsed.recentNotification.found).toBe(false);
+  });
+
+  it("show 输出平台匹配与安装状态", async () => {
+    const { out } = await cli(["hook-config", "show", "windows-codebuddy", "--json"]);
+    const parsed = JSON.parse(out.trim()) as { template: { platformMatches: boolean } };
+    expect(parsed.template.platformMatches).toBe(true);
+  });
+
   it("未知模板 → 退出码 2", async () => {
     const { code } = await cli(["hook-config", "show", "ghost", "--json"]);
     expect(code).toBe(2);

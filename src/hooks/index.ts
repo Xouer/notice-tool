@@ -1,10 +1,16 @@
 /**
  * 钩子配置模块公共出口（006-T002）。
  */
-export { HookConfigManager, type ManagerOptions, type TemplateView } from "./manager.js";
+export {
+  HookConfigManager,
+  type ManagerOptions,
+  type TemplateView,
+  type StatusResult,
+} from "./manager.js";
 export {
   buildHookTemplates,
   findHookTemplate,
+  agentConfigDir,
   KNOWN_TEMPLATE_IDS,
   AGENT_LABELS,
   PLATFORM_LABELS,
@@ -16,6 +22,7 @@ export {
   HOOK_AGENTS,
   VALIDATION_STATUSES,
   FAILURE_CATEGORIES,
+  currentPlatform,
   isHookPlatform,
   isHookAgent,
   isHookTemplateId,

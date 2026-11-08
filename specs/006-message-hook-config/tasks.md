@@ -100,6 +100,9 @@ description: "Task list for Cross-Platform Message Hook Configuration"
 - [X] T027 Validate bilingual headings and cross-links across `specs/006-message-hook-config/*.md`
 - [X] T028 Run the full test suite and lint checks using the scripts in `package.json`
 - [X] T029 Review error messages, path masking, and sensitive data handling in `src/hooks/*` and `src/cli/hook-config.ts`
+- [X] T030 [FR-013] Implement platform match and agent-installation indicators in `src/hooks/manager.ts` and `src/cli/hook-config.ts`
+- [X] T031 [FR-014] Preserve custom content and template version across re-enable/upgrade in `src/storage/hook-template-repository.ts` and `src/hooks/manager.ts`
+- [X] T032 [FR-015] Implement the four-way observability diagnosis via `hook-config status` in `src/hooks/manager.ts` and `src/cli/hook-config.ts`
 
 ---
 

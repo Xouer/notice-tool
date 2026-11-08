@@ -154,6 +154,8 @@ export const hookTemplateInstances = sqliteTable(
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
     /** 用户确认后的自定义内容（JSON 字符串，可空）。 */
     customContent: text("custom_content"),
+    /** 实例采用的模板版本（FR-014：升级时保留用户状态并提示变更）。 */
+    templateVersion: text("template_version"),
     lastValidationStatus: text("last_validation_status", {
       enum: VALIDATION_STATUSES,
     })

@@ -101,6 +101,18 @@ export function findHookTemplate(
   return templates.find((t) => t.id === id);
 }
 
+/** 智能体配置目录（安装痕迹检测用，FR-013）。 */
+export function agentConfigDir(home: string, agent: HookAgent): string {
+  switch (agent) {
+    case "codebuddy":
+      return join(home, ".codebuddy");
+    case "claude-code":
+      return join(home, ".claude");
+    case "codex-cli":
+      return join(home, ".codex");
+  }
+}
+
 /** 供校验/展示：合法 id 组合集合。 */
 export const KNOWN_TEMPLATE_IDS: ReadonlySet<string> = new Set(
   HOOK_PLATFORMS.flatMap((platform) => HOOK_AGENTS.map((agent) => `${platform}-${agent}`)),

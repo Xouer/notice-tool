@@ -42,6 +42,18 @@ export function isHookPlatform(value: string): value is HookPlatform {
   return (HOOK_PLATFORMS as readonly string[]).includes(value);
 }
 
+/** 将 Node process.platform 映射为钩子平台枚举（FR-013）。 */
+export function currentPlatform(): HookPlatform {
+  switch (process.platform) {
+    case "win32":
+      return "windows";
+    case "darwin":
+      return "macos";
+    default:
+      return "linux";
+  }
+}
+
 export function isHookAgent(value: string): value is HookAgent {
   return (HOOK_AGENTS as readonly string[]).includes(value);
 }

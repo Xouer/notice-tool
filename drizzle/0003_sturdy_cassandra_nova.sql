@@ -1,0 +1,1 @@
+ALTER TABLE `hook_template_instances` ADD `template_version` text;

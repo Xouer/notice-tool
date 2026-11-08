@@ -15,7 +15,7 @@ export function registerHookConfigCommands(
 ): void {
   const hookConfig = parent
     .command("hook-config")
-    .description("管理智能体钩子配置模板（list/show/enable/disable/validate）");
+    .description("管理智能体钩子配置模板（list/show/enable/disable/validate/status）");
 
   hookConfig
     .command("list")
@@ -141,12 +141,38 @@ export function registerHookConfigCommands(
         store.close();
       }
     });
+
+  hookConfig
+    .command("status")
+    .description("诊断端到端链路：未启动/钩子失效/事件未到达/通知失败")
+    .argument("<template-id>", "模板标识，如 windows-codebuddy")
+    .action((id: string) => {
+      const ctx = makeContext();
+      const store = openStore(ctx);
+      try {
+        const manager = makeManager(ctx, store);
+        const result = manager.status(id);
+        if (ctx.json) {
+          ctx.out(`${JSON.stringify(result, null, 2)}\n`);
+        } else {
+          ctx.out(
+            `${result.templateId}\t${result.enabled ? "已启动" : "不启动"}\t钩子：${result.hookValid}` +
+              `\t平台匹配：${result.platformMatches ? "是" : "否"}\t已安装：${result.installed ? "是" : "否"}` +
+              `\t最近事件：${result.recentEvent.found ? result.recentEvent.notifyStatus : "无"}` +
+              `\t最近通知：${result.recentNotification.found ? result.recentNotification.status : "无"}\n`,
+          );
+        }
+      } finally {
+        store.close();
+      }
+    });
 }
 
 function makeManager(ctx: CliContext, store: OpenedStore): HookConfigManager {
   return new HookConfigManager({
     homeDir: ctx.homeDir,
     repository: store.hookTemplates,
+    db: store.db,
   });
 }
 
@@ -160,6 +186,9 @@ interface HookTemplateRow {
   configPath: string;
   command: string[];
   enabled: boolean;
+  platformMatches: boolean;
+  installed: boolean;
+  versionMismatch: boolean;
   lastValidationStatus: string;
   lastValidationMessage: string | null;
 }
@@ -175,6 +204,9 @@ function viewToRow(view: TemplateView): HookTemplateRow {
     configPath: view.configPath,
     command: view.command,
     enabled: view.enabled,
+    platformMatches: view.platformMatches,
+    installed: view.installed,
+    versionMismatch: view.versionMismatch,
     lastValidationStatus: view.lastValidationStatus,
     lastValidationMessage: view.lastValidationMessage,
   };

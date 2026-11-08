@@ -12,6 +12,7 @@ notice hook-config show <template-id> [--json]
 notice hook-config enable <template-id> [--confirm] [--json]
 notice hook-config disable <template-id> [--json]
 notice hook-config validate <template-id> [--json]
+notice hook-config status <template-id> [--json]
 ```
 
 ## Exit Codes/退出码
@@ -29,7 +30,9 @@ notice hook-config validate <template-id> [--json]
 - `show` 输出单一模板的完整默认配置、目标位置摘要、当前状态与最近验证结果；不包含渠道凭据。
 - `enable` 在确认后写入目标配置；成功输出 `enabled`，失败输出原因分类且不改变原配置。
 - `disable` 仅移除本工具写入的钩子配置；成功输出 `disabled`。
-- `validate` 输出当前配置可用性与失败分类；不修改任何文件。
+- `validate` 输出当前配置可用性与失败分类；不修改任何文件。平台不匹配时返回 `invalid` 并说明原因（FR-013）。
+- `status` 输出四类可观测诊断（FR-015）：`enabled`（是否已启动）、`hookValid`（钩子是否有效）、`platformMatches`/`installed`（平台与安装适用性）、`recentEvent`（最近事件，用于判断"事件未到达"）、`recentNotification`（最近通知状态，用于判断"通知失败"）。
+- 列表与详情含 `platformMatches`（模板平台是否匹配当前系统）与 `installed`（目标智能体安装痕迹）两个适用性字段（FR-013），以及 `versionMismatch`（实例版本是否落后于内置版本，FR-014）。
 - `--json` 输出纯 JSON 到 stdout；人机模式输出可读文本。
 
 ## Error Semantics/错误语义

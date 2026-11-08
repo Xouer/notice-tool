@@ -14,6 +14,8 @@ export interface HookTemplateInstanceRow {
   agent: HookAgent;
   enabled: boolean;
   customContent: unknown | null;
+  /** 实例采用的模板版本（FR-014）；未记录时为空。 */
+  templateVersion: string | null;
   lastValidationStatus: ValidationStatus;
   lastValidationMessage: string | null;
   lastValidationAt: Date | null;
@@ -26,7 +28,12 @@ export interface HookTemplateInstanceInput {
   platform: HookPlatform;
   agent: HookAgent;
   enabled?: boolean;
+  /**
+   * 自定义内容：undefined = 保留原值；null = 清除；对象 = 写入。
+   * 用于满足 FR-014（升级/重复操作不得静默清空用户自定义内容）。
+   */
   customContent?: unknown | null;
+  templateVersion?: string;
 }
 
 export class HookTemplateRepository {
@@ -53,15 +60,10 @@ export class HookTemplateRepository {
     return row === undefined ? undefined : this.#toRow(row);
   }
 
-  /** 插入或更新（幂等）；未提供 enabled 时默认 false。 */
+  /** 插入或更新（幂等）；未提供的字段保留原值（FR-014）。 */
   upsert(input: HookTemplateInstanceInput): HookTemplateInstanceRow {
     const now = new Date();
     const existing = this.get(input.templateId);
-    const enabled = input.enabled ?? false;
-    const customContent =
-      input.customContent === undefined || input.customContent === null
-        ? null
-        : JSON.stringify(input.customContent);
     if (existing === undefined) {
       this.#db
         .insert(hookTemplateInstances)
@@ -69,8 +71,9 @@ export class HookTemplateRepository {
           templateId: input.templateId,
           platform: input.platform,
           agent: input.agent,
-          enabled,
-          customContent,
+          enabled: input.enabled ?? false,
+          customContent: serializeCustomContent(input.customContent),
+          templateVersion: input.templateVersion ?? null,
           lastValidationStatus: "not_validated",
           lastValidationMessage: null,
           lastValidationAt: null,
@@ -81,7 +84,17 @@ export class HookTemplateRepository {
     } else {
       this.#db
         .update(hookTemplateInstances)
-        .set({ enabled, customContent, updatedAt: now })
+        .set({
+          enabled: input.enabled ?? existing.enabled,
+          customContent:
+            input.customContent === undefined
+              ? existing.customContent === null
+                ? null
+                : JSON.stringify(existing.customContent)
+              : serializeCustomContent(input.customContent),
+          templateVersion: input.templateVersion ?? existing.templateVersion,
+          updatedAt: now,
+        })
         .where(eq(hookTemplateInstances.templateId, input.templateId))
         .run();
     }
@@ -125,6 +138,7 @@ export class HookTemplateRepository {
       agent: row.agent,
       enabled: row.enabled,
       customContent,
+      templateVersion: row.templateVersion,
       lastValidationStatus: row.lastValidationStatus,
       lastValidationMessage: row.lastValidationMessage,
       lastValidationAt: row.lastValidationAt,
@@ -132,4 +146,10 @@ export class HookTemplateRepository {
       updatedAt: row.updatedAt,
     };
   }
+}
+
+/** undefined/null → null；对象 → JSON 字符串。 */
+function serializeCustomContent(value: unknown | null | undefined): string | null {
+  if (value === undefined || value === null) return null;
+  return JSON.stringify(value);
 }
