@@ -1,4 +1,4 @@
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { taskEvents } from "../storage/schema.js";
 import type { NoticeDatabase } from "../storage/db.js";
 
@@ -10,13 +10,30 @@ import type { NoticeDatabase } from "../storage/db.js";
 export interface DedupParams {
   sourceAgent: string;
   taskId: string;
+  /** 008：可选稳定停止事件身份；有键走保留期判重，无键走旧冷却语义。 */
+  eventKey?: string;
   /** 冷却窗口分钟数（默认 10，可配）。 */
   cooldownMinutes: number;
   now?: Date;
 }
 
-/** 判断是否为冷却窗口内的重复事件。 */
+/** 判断是否为重复事件：稳定键按完整可见历史判重；旧无键沿用冷却窗口。 */
 export function isDuplicateEvent(db: NoticeDatabase, params: DedupParams): boolean {
+  if (params.eventKey !== undefined) {
+    const hit = db
+      .select({ id: taskEvents.id })
+      .from(taskEvents)
+      .where(
+        and(
+          eq(taskEvents.sourceAgent, params.sourceAgent),
+          eq(taskEvents.taskId, params.taskId),
+          eq(taskEvents.eventKey, params.eventKey),
+        ),
+      )
+      .get();
+    return hit !== undefined;
+  }
+
   const now = params.now ?? new Date();
   const windowStart = new Date(now.getTime() - params.cooldownMinutes * 60_000);
   const hit = db
@@ -26,6 +43,7 @@ export function isDuplicateEvent(db: NoticeDatabase, params: DedupParams): boole
       and(
         eq(taskEvents.sourceAgent, params.sourceAgent),
         eq(taskEvents.taskId, params.taskId),
+        isNull(taskEvents.eventKey),
         gt(taskEvents.receivedAt, windowStart),
       ),
     )

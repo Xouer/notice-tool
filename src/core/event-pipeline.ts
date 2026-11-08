@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
   taskEvents,
@@ -26,9 +26,7 @@ import type { PlaceholderValues } from "./template.js";
  * raw_payload_ref 仅存脱敏摘要。
  */
 export class EventValidationError extends Error {
-  constructor(
-    readonly details: string[],
-  ) {
+  constructor(readonly details: string[]) {
     super(`负载校验失败：${details.join("；")}`);
     this.name = "EventValidationError";
   }
@@ -37,6 +35,8 @@ export class EventValidationError extends Error {
 export interface NormalizedEvent {
   source: string;
   taskId: string;
+  /** 008：可选稳定停止事件身份；无键时沿用旧冷却语义。 */
+  eventKey?: string;
   finishedAt: Date;
   result: ResultStatus;
   resultSummary?: string;
@@ -48,7 +48,8 @@ export interface PipelineDeps {
   channels: ChannelRepository;
   templates: TemplateRepository;
   getAdapter: (type: ChannelType) => ChannelAdapter;
-  config: { cooldownMinutes: number };
+  /** cooldownMinutes：去重冷却窗口；channels：指定通知渠道（名称/id），空/缺省 = 全部已启用渠道。 */
+  config: { cooldownMinutes: number; channels?: string[] };
   dispatchOptions?: { maxAttempts?: number; retryDelayMs?: number };
 }
 
@@ -84,7 +85,10 @@ function requireStringField(
 }
 
 /** 负载校验（contracts/hook-receiver.md）：任何非法字段整体拒绝，不猜测、不部分接受。 */
-export function validateEventPayload(input: unknown, defaultTrigger: TriggerType = "hook"): NormalizedEvent {
+export function validateEventPayload(
+  input: unknown,
+  defaultTrigger: TriggerType = "hook",
+): NormalizedEvent {
   const errors: string[] = [];
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     throw new EventValidationError(["负载必须为 JSON 对象"]);
@@ -105,6 +109,17 @@ export function validateEventPayload(input: unknown, defaultTrigger: TriggerType
   const source = requireStringField(body, "source", 64, errors);
   const taskId = requireStringField(body, "taskId", 256, errors);
 
+  let eventKey: string | undefined;
+  if (body.eventKey !== undefined && body.eventKey !== null) {
+    if (typeof body.eventKey !== "string" || body.eventKey.trim().length === 0) {
+      errors.push("字段 eventKey 必须为非空字符串");
+    } else if (body.eventKey.length > 512) {
+      errors.push(`字段 eventKey 长度 ${body.eventKey.length} 超过上限 512`);
+    } else {
+      eventKey = `sha256:${createHash("sha256").update(body.eventKey).digest("hex")}`;
+    }
+  }
+
   let finishedAt = new Date();
   if (body.finishedAt !== undefined && body.finishedAt !== null) {
     if (typeof body.finishedAt !== "string" || Number.isNaN(Date.parse(body.finishedAt))) {
@@ -116,7 +131,10 @@ export function validateEventPayload(input: unknown, defaultTrigger: TriggerType
 
   let result: ResultStatus = "unknown";
   if (body.result !== undefined && body.result !== null) {
-    if (typeof body.result !== "string" || !(RESULT_STATUSES as readonly string[]).includes(body.result)) {
+    if (
+      typeof body.result !== "string" ||
+      !(RESULT_STATUSES as readonly string[]).includes(body.result)
+    ) {
       errors.push(`字段 result 必须为 ${RESULT_STATUSES.join("/")} 之一`);
     } else {
       result = body.result as ResultStatus;
@@ -136,7 +154,10 @@ export function validateEventPayload(input: unknown, defaultTrigger: TriggerType
 
   let trigger = defaultTrigger;
   if (body.trigger !== undefined && body.trigger !== null) {
-    if (typeof body.trigger !== "string" || !(TRIGGER_TYPES as readonly string[]).includes(body.trigger)) {
+    if (
+      typeof body.trigger !== "string" ||
+      !(TRIGGER_TYPES as readonly string[]).includes(body.trigger)
+    ) {
       errors.push(`字段 trigger 必须为 ${TRIGGER_TYPES.join("/")} 之一`);
     } else {
       trigger = body.trigger as TriggerType;
@@ -149,6 +170,7 @@ export function validateEventPayload(input: unknown, defaultTrigger: TriggerType
   return {
     source: source!,
     taskId: taskId!,
+    eventKey,
     finishedAt,
     result,
     resultSummary,
@@ -168,51 +190,67 @@ export async function ingestTaskEndEvent(
   const event = validateEventPayload(payload, options.trigger ?? "hook");
   const sanitizedSummary = filterSensitiveSummary(event.resultSummary);
 
-  // 去重：命中仅补充记录，不再触发通知（FR-007）
-  if (isDuplicateEvent(deps.db, {
-    sourceAgent: event.source,
-    taskId: event.taskId,
-    cooldownMinutes: deps.config.cooldownMinutes,
-  })) {
-    const duplicatedId = randomUUID();
-    const now = new Date();
+  // 判重与首次写入在同一同步事务内，避免并发重复投递都通过先查再插。
+  let deduplicated = false;
+  let eventId = "";
+  let receivedAt = new Date();
+  deps.db.$client.transaction(() => {
+    const isDuplicate = isDuplicateEvent(deps.db, {
+      sourceAgent: event.source,
+      taskId: event.taskId,
+      eventKey: event.eventKey,
+      cooldownMinutes: deps.config.cooldownMinutes,
+    });
+    receivedAt = new Date();
+    if (isDuplicate) {
+      deduplicated = true;
+      eventId = randomUUID();
+      deps.db
+        .insert(taskEvents)
+        .values({
+          id: eventId,
+          sourceAgent: event.source,
+          taskId: event.taskId,
+          eventKey: event.eventKey,
+          finishedAt: event.finishedAt,
+          resultStatus: event.result,
+          triggerType: event.trigger,
+          rawPayloadRef: sanitizedSummary,
+          receivedAt,
+          notifyStatus: "duplicated",
+        })
+        .run();
+      return;
+    }
+    eventId = randomUUID();
     deps.db
       .insert(taskEvents)
       .values({
-        id: duplicatedId,
+        id: eventId,
         sourceAgent: event.source,
         taskId: event.taskId,
+        eventKey: event.eventKey,
         finishedAt: event.finishedAt,
         resultStatus: event.result,
         triggerType: event.trigger,
         rawPayloadRef: sanitizedSummary,
-        receivedAt: now,
-        notifyStatus: "duplicated",
+        receivedAt,
+        notifyStatus: "received",
       })
       .run();
-    return { eventId: duplicatedId, deduplicated: true, notifyStatus: "duplicated", records: [] };
+  })();
+
+  if (deduplicated) {
+    return {
+      eventId: eventId!,
+      deduplicated: true,
+      notifyStatus: "duplicated",
+      records: [],
+    };
   }
 
-  // 落库
-  const eventId = randomUUID();
-  const receivedAt = new Date();
-  deps.db
-    .insert(taskEvents)
-    .values({
-      id: eventId,
-      sourceAgent: event.source,
-      taskId: event.taskId,
-      finishedAt: event.finishedAt,
-      resultStatus: event.result,
-      triggerType: event.trigger,
-      rawPayloadRef: sanitizedSummary,
-      receivedAt,
-      notifyStatus: "received",
-    })
-    .run();
-
   if (options.send === false) {
-    return { eventId, deduplicated: false, notifyStatus: "received", records: [] };
+    return { eventId: eventId!, deduplicated: false, notifyStatus: "received", records: [] };
   }
 
   // 分发
@@ -230,6 +268,10 @@ export async function ingestTaskEndEvent(
     getAdapter: deps.getAdapter,
     eventId,
     values,
+    channelNames:
+      deps.config.channels !== undefined && deps.config.channels.length > 0
+        ? deps.config.channels
+        : undefined,
     maxAttempts: deps.dispatchOptions?.maxAttempts,
     retryDelayMs: deps.dispatchOptions?.retryDelayMs,
   });
@@ -242,11 +284,7 @@ export async function ingestTaskEndEvent(
     message = "有事件但无可用渠道：未产生通知记录（请先 `notice channel add` 配置并启用渠道）";
   }
   if (notifyStatus !== "received") {
-    deps.db
-      .update(taskEvents)
-      .set({ notifyStatus })
-      .where(eq(taskEvents.id, eventId))
-      .run();
+    deps.db.update(taskEvents).set({ notifyStatus }).where(eq(taskEvents.id, eventId)).run();
   }
   return { eventId, deduplicated: false, notifyStatus, records, message };
 }

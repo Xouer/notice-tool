@@ -10,6 +10,7 @@ import { openFileDatabase, type NoticeDatabase } from "../storage/db.js";
 import { seedDefaultTemplates } from "../storage/seed.js";
 import { ChannelRepository } from "../storage/channel-repository.js";
 import { TemplateRepository } from "../storage/template-repository.js";
+import { HookTemplateRepository } from "../storage/hook-template-repository.js";
 import { BlobCipher } from "../storage/crypto.js";
 import { InMemorySecretStore, type SecretStore } from "../storage/secret-store.js";
 import { DpapiSecretStore } from "../storage/secret-store.dpapi.js";
@@ -20,10 +21,12 @@ import { ChannelConfigError } from "../channels/channel-config.js";
 import { EventValidationError } from "../core/event-pipeline.js";
 import { getAdapter } from "../channels/index.js";
 import type { TriggerType } from "../storage/schema.js";
+import { HookConfigError } from "../hooks/index.js";
 import { ingestTaskEndEvent, type IngestResult } from "../core/event-pipeline.js";
 import { registerChannelCommands } from "./channel.js";
 import { registerTemplateCommands } from "./template.js";
 import { registerHookCommand } from "./hook.js";
+import { registerHookConfigCommands } from "./hook-config.js";
 import { registerServeCommand } from "./serve.js";
 import { registerWatchCommand } from "./watch.js";
 import { registerMcpCommand } from "./mcp.js";
@@ -48,6 +51,8 @@ export interface CliRunOptions {
   stdin?: Readable;
   /** 向导 IO 注入接缝（T012，测试用；未注入时按需构造真实终端 IO）。 */
   wizardIO?: WizardIO;
+  /** 主目录注入接缝（hook-config 目标配置路径；未注入时用真实用户主目录）。 */
+  homeDir?: string;
 }
 
 export interface CliContext {
@@ -59,6 +64,8 @@ export interface CliContext {
   stdin?: Readable;
   /** 交互式配置向导 IO（channel add 分派使用；测试注入接缝）。 */
   wizardIO?: WizardIO;
+  /** 主目录注入接缝（hook-config 目标配置路径）。 */
+  homeDir?: string;
 }
 
 /** 数据目录：NOTICE_DATA_DIR 环境变量优先（测试接缝），否则 %APPDATA%/notice-tool。 */
@@ -87,30 +94,41 @@ interface OpenedStore {
   db: NoticeDatabase;
   repo: ChannelRepository;
   templates: TemplateRepository;
+  hookTemplates: HookTemplateRepository;
   close: () => void;
 }
 
 export type { OpenedStore };
 
-/** 构建统一事件接入管线入口（CLI/HTTP 共用，T041）。 */
+/**
+ * 构建统一事件接入管线入口（CLI/HTTP 共用，T041）。
+ * overrides.channels：钩子命令行 --channels 指定，非空时优先于 config.json 的 notify.channels。
+ */
 export function createIngest(
   store: OpenedStore,
   ctx: CliContext,
   dispatchOptions?: { maxAttempts?: number; retryDelayMs?: number },
+  overrides?: { channels?: string[] },
 ): (payload: unknown, trigger: TriggerType) => Promise<IngestResult> {
-  return (payload, trigger) =>
-    ingestTaskEndEvent(
+  return (payload, trigger) => {
+    const cfg = loadCliConfig(ctx);
+    const channels =
+      overrides?.channels !== undefined && overrides.channels.length > 0
+        ? overrides.channels
+        : cfg.notify.channels;
+    return ingestTaskEndEvent(
       {
         db: store.db,
         channels: store.repo,
         templates: store.templates,
         getAdapter,
-        config: { cooldownMinutes: loadCliConfig(ctx).dedup.cooldownMinutes },
+        config: { cooldownMinutes: cfg.dedup.cooldownMinutes, channels },
         dispatchOptions,
       },
       payload,
       { trigger },
     );
+  };
 }
 
 function loadCliConfig(ctx: CliContext): NoticeConfig {
@@ -150,6 +168,7 @@ function openStore(ctx: CliContext): OpenedStore {
       db,
       repo: new ChannelRepository(db, cipher),
       templates: new TemplateRepository(db),
+      hookTemplates: new HookTemplateRepository(db),
       close: () => {
         try {
           db.$client.close();
@@ -164,6 +183,24 @@ function openStore(ctx: CliContext): OpenedStore {
       3,
     );
   }
+}
+
+/**
+ * 008：history events 与父命令都有 --limit/--status；为避免 Commander 继承冲突，
+ * 将公开参数映射为子命令内部 --events-limit/--events-status。
+ */
+function normalizeHistoryEventArgs(argv: string[]): string[] {
+  if (argv[0] !== "history" || argv[1] !== "events") return argv;
+  return argv.map((token, index) => {
+    if (index < 2) return token;
+    if (token === "--limit") return "--events-limit";
+    if (token.startsWith("--limit=")) return `--events-limit=${token.slice("--limit=".length)}`;
+    if (token === "--status") return "--events-status";
+    if (token.startsWith("--status=")) {
+      return `--events-status=${token.slice("--status=".length)}`;
+    }
+    return token;
+  });
 }
 
 export async function runCli(argv: string[], opts: CliRunOptions = {}): Promise<number> {
@@ -197,6 +234,7 @@ export async function runCli(argv: string[], opts: CliRunOptions = {}): Promise<
     err,
     stdin: opts.stdin,
     wizardIO: opts.wizardIO,
+    homeDir: opts.homeDir,
   });
 
   program
@@ -217,13 +255,14 @@ export async function runCli(argv: string[], opts: CliRunOptions = {}): Promise<
   registerChannelCommands(program, makeContext, openStore);
   registerTemplateCommands(program, makeContext, openStore);
   registerHookCommand(program, makeContext, openStore);
+  registerHookConfigCommands(program, makeContext, openStore);
   registerServeCommand(program, makeContext, openStore);
   registerWatchCommand(program, makeContext, openStore);
   registerMcpCommand(program, makeContext, openStore);
   registerHistoryCommands(program, makeContext, openStore);
 
   try {
-    await program.parseAsync(argv, { from: "user" });
+    await program.parseAsync(normalizeHistoryEventArgs(argv), { from: "user" });
     return 0;
   } catch (cause) {
     if (cause instanceof CommanderError) {
@@ -231,9 +270,7 @@ export async function runCli(argv: string[], opts: CliRunOptions = {}): Promise<
       return 2; // 用法错误 → 输入校验失败
     }
     if (cause instanceof EventValidationError) {
-      err(
-        `${JSON.stringify({ error: "VALIDATION_FAILED", details: cause.details })}\n`,
-      );
+      err(`${JSON.stringify({ error: "VALIDATION_FAILED", details: cause.details })}\n`);
       return 2;
     }
     if (cause instanceof CliFailure) {
@@ -249,6 +286,11 @@ export async function runCli(argv: string[], opts: CliRunOptions = {}): Promise<
     if (cause instanceof TemplateError) {
       err(`输入校验失败：${cause.message}\n`);
       return 2;
+    }
+    if (cause instanceof HookConfigError) {
+      const code = cause.category === "conflict" || cause.category === "not_found" ? 2 : 1;
+      err(`${cause.message}\n`);
+      return code;
     }
     if (cause instanceof Error && cause.name === "SqliteError") {
       err(`本地存储异常：${redactSensitive(cause.message)}\n`);

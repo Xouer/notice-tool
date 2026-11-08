@@ -22,6 +22,8 @@ export interface NoticeConfig {
   };
   dedup: { cooldownMinutes: number };
   antiFlood: { aggregateWindowSeconds: number; perChannelPerMinute: number };
+  /** 指定通知渠道（渠道名称或 id）；空数组/缺省 = 全部已启用渠道（向后兼容）。 */
+  notify: { channels: string[] };
   retentionDays: number;
 }
 
@@ -32,6 +34,7 @@ export const DEFAULT_CONFIG: Readonly<NoticeConfig> = {
   polling: { enabled: true, intervalSeconds: 10, adapters: ["claude-code"] },
   dedup: { cooldownMinutes: 10 },
   antiFlood: { aggregateWindowSeconds: 30, perChannelPerMinute: 20 },
+  notify: { channels: [] },
   retentionDays: 30,
 };
 
@@ -51,6 +54,7 @@ const SECTION_FIELD_TYPES: Record<string, Record<string, FieldType>> = {
   polling: { enabled: "boolean", intervalSeconds: "number", adapters: "array" },
   dedup: { cooldownMinutes: "number" },
   antiFlood: { aggregateWindowSeconds: "number", perChannelPerMinute: "number" },
+  notify: { channels: "array" },
 };
 
 const KNOWN_TOP_LEVEL_KEYS = new Set([
@@ -107,6 +111,15 @@ function validateAdapters(adapters: PollingAdapterConfig[]): void {
     throw new ConfigError(
       "polling.adapters 条目必须为适配器注册名（字符串）或 generic-file/codex-cli 配置块",
     );
+  }
+}
+
+/** notify.channels 条目必须为非空渠道名称或 id。 */
+function validateNotifyChannels(channels: string[]): void {
+  for (const entry of channels) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new ConfigError("notify.channels 条目必须为非空字符串（渠道名称或 id）");
+    }
   }
 }
 
@@ -184,7 +197,7 @@ export function loadConfig(
   }
 
   // 数值合法性 / numeric sanity
-  const { server, polling, dedup, antiFlood, retentionDays } = config;
+  const { server, polling, dedup, antiFlood, notify, retentionDays } = config;
   if (
     !Number.isInteger(server.port) ||
     server.port < 1 ||
@@ -208,6 +221,7 @@ export function loadConfig(
     throw new ConfigError("retentionDays 必须为 ≥ 1 的整数");
   }
   validateAdapters(config.polling.adapters);
+  validateNotifyChannels(notify.channels);
 
   return config;
 }

@@ -25,7 +25,10 @@ import { notificationRecords } from "../../src/storage/schema.js";
 function makePipelineDeps() {
   const db = openMemoryDatabase();
   seedDefaultTemplates(db);
-  const channels = new ChannelRepository(db, new BlobCipher(new InMemorySecretStore().getMainKey()));
+  const channels = new ChannelRepository(
+    db,
+    new BlobCipher(new InMemorySecretStore().getMainKey()),
+  );
   const templates = new TemplateRepository(db);
   const ch = channels.create({
     type: "feishu",
@@ -52,7 +55,10 @@ function makePipelineDeps() {
   };
 }
 
-function makeScheduler(deps: ReturnType<typeof makePipelineDeps>, adapters: [GenericFileAdapter, ...GenericFileAdapter[]]) {
+function makeScheduler(
+  deps: ReturnType<typeof makePipelineDeps>,
+  adapters: [GenericFileAdapter, ...GenericFileAdapter[]],
+) {
   const errors: Error[] = [];
   const scheduler = new PollingScheduler({
     adapters,
@@ -71,7 +77,11 @@ describe("polling flow / 巡查流集成（T048）", () => {
     try {
       const file = join(dir, "demo-status.txt");
       writeFileSync(file, "step running\n", "utf8");
-      const adapter = new GenericFileAdapter({ path: file, completionPattern: "status=completed", sourceName: "demo" });
+      const adapter = new GenericFileAdapter({
+        path: file,
+        completionPattern: "status=completed",
+        sourceName: "demo",
+      });
       const { scheduler } = makeScheduler(deps, [adapter]);
 
       await scheduler.scanOnce(); // 基线：running，不通知
@@ -96,7 +106,11 @@ describe("polling flow / 巡查流集成（T048）", () => {
     try {
       const file = join(dir, "demo-status.txt");
       writeFileSync(file, "step running\n", "utf8");
-      const adapter = new GenericFileAdapter({ path: file, completionPattern: "status=completed", sourceName: "demo" });
+      const adapter = new GenericFileAdapter({
+        path: file,
+        completionPattern: "status=completed",
+        sourceName: "demo",
+      });
       const { scheduler } = makeScheduler(deps, [adapter]);
 
       await scheduler.scanOnce(); // 基线 running
@@ -125,8 +139,16 @@ describe("polling flow / 巡查流集成（T048）", () => {
       const missing = join(dir, "missing.txt");
       const okFile = join(dir, "ok.txt");
       writeFileSync(okFile, "status=completed\n", "utf8");
-      const bad = new GenericFileAdapter({ path: missing, completionPattern: "x", sourceName: "bad" });
-      const ok = new GenericFileAdapter({ path: okFile, completionPattern: "status=completed", sourceName: "ok" });
+      const bad = new GenericFileAdapter({
+        path: missing,
+        completionPattern: "x",
+        sourceName: "bad",
+      });
+      const ok = new GenericFileAdapter({
+        path: okFile,
+        completionPattern: "status=completed",
+        sourceName: "ok",
+      });
       const { scheduler, errors } = makeScheduler(deps, [bad, ok]);
 
       const notifications = await scheduler.scanOnce();
@@ -145,7 +167,11 @@ describe("polling flow / 巡查流集成（T048）", () => {
     try {
       const file = join(dir, "demo-status.txt");
       writeFileSync(file, "step running\n", "utf8");
-      const adapter = new GenericFileAdapter({ path: file, completionPattern: "status=completed", sourceName: "demo" });
+      const adapter = new GenericFileAdapter({
+        path: file,
+        completionPattern: "status=completed",
+        sourceName: "demo",
+      });
       const first = makeScheduler(deps, [adapter]);
       await first.scheduler.scanOnce(); // 基线 running
       appendFileSync(file, "status=completed done\n", "utf8");
@@ -161,5 +187,68 @@ describe("polling flow / 巡查流集成（T048）", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+interface FakePollTask {
+  taskId: string;
+  status: "running" | "completed";
+  eventKey?: string;
+  finishedAt?: Date;
+}
+
+class FakePollAdapter {
+  readonly name = "fake";
+  readonly sourceAgent = "fake";
+  #tasks: FakePollTask[] = [];
+  setTasks(tasks: FakePollTask[]): void {
+    this.#tasks = [...tasks];
+  }
+  async readTasks(): Promise<FakePollTask[]> {
+    return [...this.#tasks];
+  }
+}
+
+describe("polling event identity / 巡查连续终态事件键（008 US2）", () => {
+  it("相同终态键不重复上报，新终态键即使持续结束态也上报", async () => {
+    const deps = makePipelineDeps();
+    const adapter = new FakePollAdapter();
+    const { scheduler } = makeScheduler(deps, [adapter as unknown as GenericFileAdapter]);
+    adapter.setTasks([
+      { taskId: "session-1", status: "completed", eventKey: "stop-1", finishedAt: new Date() },
+    ]);
+    const first = await scheduler.scanOnce();
+    expect(first).toHaveLength(1);
+    expect(deps.sentCount()).toBe(1);
+
+    adapter.setTasks([
+      { taskId: "session-1", status: "completed", eventKey: "stop-1", finishedAt: new Date() },
+    ]);
+    expect(await scheduler.scanOnce()).toHaveLength(0);
+    expect(deps.sentCount()).toBe(1);
+
+    adapter.setTasks([
+      { taskId: "session-1", status: "completed", eventKey: "stop-2", finishedAt: new Date() },
+    ]);
+    const second = await scheduler.scanOnce();
+    expect(second).toHaveLength(1);
+    expect(second[0]?.deduplicated).toBe(false);
+    expect(deps.sentCount()).toBe(2);
+  });
+
+  it("启动补检仍受冷却窗口约束且不重复", async () => {
+    const deps = makePipelineDeps();
+    const adapter = new FakePollAdapter();
+    const { scheduler } = makeScheduler(deps, [adapter as unknown as GenericFileAdapter]);
+    adapter.setTasks([
+      {
+        taskId: "session-base",
+        status: "completed",
+        eventKey: "stop-base",
+        finishedAt: new Date(Date.now() - 11 * 60_000),
+      },
+    ]);
+    expect(await scheduler.scanOnce()).toHaveLength(0);
+    expect(deps.sentCount()).toBe(0);
   });
 });

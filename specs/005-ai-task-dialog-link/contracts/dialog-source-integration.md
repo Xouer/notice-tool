@@ -21,8 +21,9 @@
 
 **输入**：CodeBuddy 通过 stdin 传入 JSON（含 `session_id`、`transcript_path` 等，实测字段以 research.md 待验证项 2 为准）。
 
-**处理契约**：
-- `session_id` → `task_id`；缺失时拒绝并记录本地日志（无任务标识无法去重，属无效事件）。
+**处理契约**（008 更新）：
+- `session_id` → `task_id`；缺失时使用 `unknown-session`，Stop 仍进入通知流程。
+- `eventKey` 或 stop/event ID 优先作为事件身份；否则用转录终态记录稳定身份生成不可逆散列；均不可得时按本次调用降级受理并输出脱敏提示。
 - 其余字段缺失一律走默认值（见 data-model.md 事件映射表），不视为错误。
 - 复用现有 stdin 钩子的 JSON 校验、限流与事件管线，退出码语义不变。
 
@@ -38,10 +39,11 @@ notify = ["notice", "hook", "--source", "codex-cli", "--payload-argv"]
 
 **输入**：Codex 在 `agent-turn-complete` 时以 argv 传入事件 JSON（`type`、`thread-id`、`last-assistant-message`、`input_messages`、`cwd`）。
 
-**处理契约**：
+**处理契约**（008 更新）：
 - `--payload-argv` 时从 argv 解析 JSON；仅处理 `type == "agent-turn-complete"`，其他类型静默忽略（退出码 0）。
-- `thread-id` → `task_id`，缺失处理同 CodeBuddy 契约。
-- `last-assistant-message` → `result_summary`，截断至模板正文上限（2000 字符）并经敏感信息过滤。
+- `thread-id` → `task_id`，缺失时使用 `unknown-session`。
+- turn/event ID 或 `eventKey` 优先作为事件身份；无稳定身份时按本次调用降级受理并提示。
+- `last-assistant-message` → `result_summary`，截断并经敏感信息过滤。
 - JSON 解析失败：退出码非 0 并输出脱敏错误信息，不抛出原始负载。
 
 **输出**：同 CodeBuddy 契约（`source_agent=codex-cli, trigger=hook`）。
@@ -60,5 +62,6 @@ notify = ["notice", "hook", "--source", "codex-cli", "--payload-argv"]
 
 ## Compatibility/兼容性说明
 
-- 本契约仅新增可选 CLI 参数与可选配置项；现有 stdin 钩子、HTTP `/v1/hooks/task-completed`、MCP 工具与全部配置格式不变。
-- 无新增对外 HTTP 端点，无持久化 schema 变更（宪法 III）。
+- 008 增加可选 `eventKey` 与本地 `task_events.event_key`；旧无键 CLI、HTTP、MCP 负载保持原冷却去重语义。
+- Claude Stop 来源必须保持 `claude-code`；同会话不同 Stop 不再因会话 ID 相同被合并。
+- 详细规则见 `specs/008-notify-all-stops/contracts/stop-notification.md`。

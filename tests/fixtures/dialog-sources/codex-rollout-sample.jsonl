@@ -1,4 +1,4 @@
 {"timestamp":"2026-11-07T10:00:00.000Z","type":"session_meta","session_id":"fixture-thread-codex-0001","cwd":"C:\\fake\\project"}
 {"timestamp":"2026-11-07T10:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"fixture：请修复虚构模块的测试"}}
 {"timestamp":"2026-11-07T10:00:05.000Z","type":"event_msg","payload":{"type":"agent_message","message":"fixture：虚构任务进行中"}}
-{"timestamp":"2026-11-07T10:00:30.000Z","type":"event_msg","payload":{"type":"turn_complete","status":"success"}}
+{"timestamp":"2026-11-07T10:00:30.000Z","type":"event_msg","payload":{"type":"turn_complete","status":"success","turn_id":"fixture-turn-codex-0001"}}

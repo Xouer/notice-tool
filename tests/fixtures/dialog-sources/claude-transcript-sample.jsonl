@@ -1,0 +1,3 @@
+{"type":"session","session_id":"fixture-session-claude-0001","timestamp":"2026-11-08T10:00:00Z"}
+{"type":"result","session_id":"fixture-session-claude-0001","uuid":"fixture-result-claude-0001","timestamp":"2026-11-08T10:00:01Z","subtype":"success","result":"fixture：第一次单轮问答结束"}
+{"type":"result","session_id":"fixture-session-claude-0001","uuid":"fixture-result-claude-0002","timestamp":"2026-11-08T10:01:01Z","subtype":"success","result":"fixture：第二次单轮问答结束"}

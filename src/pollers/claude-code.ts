@@ -7,6 +7,7 @@ import {
   type AgentTask,
   type AgentTaskStatus,
 } from "./adapter.js";
+import { createStableEventKey } from "../core/stop-identity.js";
 
 /**
  * claude-code 会话巡查适配器（T050，research.md R5）：
@@ -95,14 +96,17 @@ export class ClaudeCodeAdapter implements AgentStatusAdapter {
         `无法读取会话文件 ${file}：${cause instanceof Error ? cause.message : String(cause)}`,
       );
     }
-    const lines = tail.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    const lines = tail
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
     if (lines.length === 0) {
       throw new AgentStatusError(`claude-code 会话文件为空：${file}`);
     }
     const fallbackTaskId = basename(file).replace(/\.jsonl$/i, "");
     const tasks: AgentTask[] = [];
     let parsedAny = false;
-    for (const line of lines) {
+    for (const [index, line] of lines.entries()) {
       let obj: Record<string, unknown>;
       try {
         obj = JSON.parse(line) as Record<string, unknown>;
@@ -120,9 +124,16 @@ export class ClaudeCodeAdapter implements AgentStatusAdapter {
         typeof obj.timestamp === "string" && !Number.isNaN(Date.parse(obj.timestamp))
           ? new Date(obj.timestamp)
           : undefined;
+      const stableId =
+        typeof obj.uuid === "string" && obj.uuid !== ""
+          ? obj.uuid
+          : typeof obj.timestamp === "string"
+            ? obj.timestamp
+            : `line:${index}`;
       tasks.push({
         taskId,
         status,
+        eventKey: createStableEventKey(`${this.sourceAgent}:${taskId}:${stableId}`),
         finishedAt,
         summary: typeof obj.result === "string" ? obj.result.slice(0, SUMMARY_MAX) : undefined,
       });

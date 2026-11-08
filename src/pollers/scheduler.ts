@@ -36,6 +36,7 @@ export class PollingScheduler {
   readonly #intervalMs: number;
   readonly #cooldownMinutes: number;
   readonly #state = new Map<string, AgentTaskStatus>();
+  readonly #finishedEventKeys = new Map<string, string | undefined>();
   #timer: NodeJS.Timeout | undefined;
 
   constructor(deps: SchedulerDeps) {
@@ -89,7 +90,11 @@ export class PollingScheduler {
   ): Promise<PollNotification | undefined> {
     const key = `${adapter.name}:${task.taskId}`;
     const previous = this.#state.get(key);
+    const previousEventKey = this.#finishedEventKeys.get(key);
     this.#state.set(key, task.status);
+    if (FINISHED_STATUSES.includes(task.status)) {
+      this.#finishedEventKeys.set(key, task.eventKey);
+    }
 
     const finished = FINISHED_STATUSES.includes(task.status);
     let shouldIngest = false;
@@ -97,9 +102,11 @@ export class PollingScheduler {
       // 基线：仅补检冷却窗口内已结束的任务（spec 边界情况 2）
       if (finished) {
         const finishedAt = task.finishedAt ?? new Date();
-        shouldIngest =
-          Date.now() - finishedAt.getTime() <= this.#cooldownMinutes * 60_000;
+        shouldIngest = Date.now() - finishedAt.getTime() <= this.#cooldownMinutes * 60_000;
       }
+    } else if (finished && task.eventKey !== previousEventKey) {
+      // 008：同一任务持续结束态时，新终态事件键也是新完成
+      shouldIngest = true;
     } else if (finished && !FINISHED_STATUSES.includes(previous)) {
       shouldIngest = true; // 状态迁移：非结束态 → 结束态
     }
@@ -114,6 +121,9 @@ export class PollingScheduler {
       result: toResultStatus(task.status),
       trigger: "polling",
     };
+    if (task.eventKey !== undefined) {
+      payload.eventKey = task.eventKey;
+    }
     if (task.summary !== undefined && task.summary !== "") {
       payload.resultSummary = task.summary;
     }
@@ -131,10 +141,7 @@ export class PollingScheduler {
       this.#deps.onNotify?.(notification);
       return notification;
     } catch (cause) {
-      this.#deps.onError?.(
-        cause instanceof Error ? cause : new Error(String(cause)),
-        adapter.name,
-      );
+      this.#deps.onError?.(cause instanceof Error ? cause : new Error(String(cause)), adapter.name);
       return undefined;
     }
   }

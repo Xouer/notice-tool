@@ -8,6 +8,20 @@
       "when": 1794036834871,
       "tag": "0000_special_the_phantom",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1794103193912,
+      "tag": "0001_dear_colossus",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794105357392,
+      "tag": "0002_massive_argent",
+      "breakpoints": true
     }
   ]
 }

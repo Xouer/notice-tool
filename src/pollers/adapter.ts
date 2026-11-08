@@ -10,24 +10,17 @@ export class AgentStatusError extends Error {
   }
 }
 
-export type AgentTaskStatus =
-  | "running"
-  | "completed"
-  | "failed"
-  | "interrupted"
-  | "unknown";
+export type AgentTaskStatus = "running" | "completed" | "failed" | "interrupted" | "unknown";
 
 /** 结束态（触发通知的状态）。 */
-export const FINISHED_STATUSES: readonly AgentTaskStatus[] = [
-  "completed",
-  "failed",
-  "interrupted",
-];
+export const FINISHED_STATUSES: readonly AgentTaskStatus[] = ["completed", "failed", "interrupted"];
 
 export interface AgentTask {
   /** 任务/会话标识（来源侧提供）。 */
   taskId: string;
   status: AgentTaskStatus;
+  /** 008：终态记录稳定事件身份；运行态可缺省。 */
+  eventKey?: string;
   /** 观察到的结束时间（缺省由管线取接收时间）。 */
   finishedAt?: Date;
   /** 结束概要（进入 resultSummary 前会经敏感过滤）。 */

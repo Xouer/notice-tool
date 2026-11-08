@@ -81,11 +81,11 @@ notice channel add feishu --name legacy --webhook-url "https://open.feishu.cn/op
 
 把 AI 编程助手对话框里的多步骤 Agent 任务结束事件接入通知管线（优先钩子、巡检兜底、MCP 补充）：
 
-- **CodeBuddy**：在 `~/.codebuddy/settings.json` 配置 `Stop` 钩子 → `notice hook --source codebuddy`。
+- **CodeBuddy**：在 `~/.codebuddy/settings.json` 配置 `Stop` 钩子 → `notice hook --source codebuddy`（可加 `--channels 渠道1 --channels 渠道2` 指定通知渠道，未指定时走 `config.json` 的 `notify.channels`）。
 - **Claude Code**：`Stop` 钩子 → `notice hook --source claude-code`，或启用现有 `claude-code` 巡检适配器。
 - **Codex CLI**：`~/.codex/config.toml` 配置 `notify = ["notice", "hook", "--source", "codex-cli", "--payload-argv"]`，或启用 `codex-cli` 巡检适配器。
 
-> 单轮简单问答不触发通知；仅多步骤 Agent 任务整体结束（成功/失败/中断）通知一次。MCP 兜底依赖 Agent 主动调用，可靠性弱于钩子/巡检，可能漏报。完整步骤与排查见 [specs/005-ai-task-dialog-link/quickstart.md](specs/005-ai-task-dialog-link/quickstart.md)。
+> 单轮问答和多步骤任务只要实际触发 `Stop` 均通知；同一会话的不同 Stop 分别通知，同一稳定 Stop 事件跨钩子/巡检只通知一轮。来源完全无法提供稳定事件身份时按新 Stop 受理并提示降级。MCP 兜底依赖 Agent 主动调用，可靠性弱于钩子/巡检，可能漏报。完整步骤与排查见 [specs/008-notify-all-stops/quickstart.md](specs/008-notify-all-stops/quickstart.md)。
 
 ## 安全说明
 

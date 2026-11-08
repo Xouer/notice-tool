@@ -18,6 +18,7 @@ describe("config loader / 配置加载（T004）", () => {
       polling: { enabled: true, intervalSeconds: 10, adapters: ["claude-code"] },
       dedup: { cooldownMinutes: 10 },
       antiFlood: { aggregateWindowSeconds: 30, perChannelPerMinute: 20 },
+      notify: { channels: [] },
       retentionDays: 30,
     });
   });
@@ -54,5 +55,28 @@ describe("config loader / 配置加载（T004）", () => {
 
   it("非 JSON 字符串输入抛出配置错误", () => {
     expect(() => loadConfig("not-json{")).toThrow();
+  });
+
+  it("notify.channels 指定渠道列表生效", () => {
+    const cfg = loadConfig({ notify: { channels: ["feishu-主号", "mail-backup"] } });
+    expect(cfg.notify).toEqual({ channels: ["feishu-主号", "mail-backup"] });
+  });
+
+  it("notify.channels 缺省取空数组（= 全部已启用渠道）", () => {
+    const cfg = loadConfig({});
+    expect(cfg.notify).toEqual({ channels: [] });
+  });
+
+  it("notify.channels 条目为空字符串抛出配置错误", () => {
+    expect(() => loadConfig({ notify: { channels: ["ok", "  "] } })).toThrow(
+      "notify.channels 条目必须为非空字符串",
+    );
+  });
+
+  it("notify.channels 类型错误抛出配置错误", () => {
+    expect(() => loadConfig({ notify: { channels: "feishu" } })).toThrow();
+    expect(() => loadConfig({ notify: { channels: [1] } })).toThrow(
+      "notify.channels 条目必须为非空字符串",
+    );
   });
 });

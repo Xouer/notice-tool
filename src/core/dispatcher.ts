@@ -32,6 +32,11 @@ export interface DispatchDeps {
   values: PlaceholderValues;
   /** 限定渠道类型（MCP send_notification 指定 channels 时使用）。 */
   channelTypes?: ChannelType[];
+  /**
+   * 限定渠道名称或 id（config.notify.channels 指定时使用）。
+   * 未指定 = 全部已启用渠道；指定后仅向命中且启用的渠道分发。
+   */
+  channelNames?: string[];
   /** 直接指定发送内容（跳过模板渲染，MCP 即时通知用）。 */
   customMessage?: string;
   maxAttempts?: number;
@@ -74,7 +79,10 @@ export async function dispatchEvent(deps: DispatchDeps): Promise<DispatchRecordR
     .filter(
       (c) =>
         c.enabled &&
-        (deps.channelTypes === undefined || deps.channelTypes.includes(c.type)),
+        (deps.channelTypes === undefined || deps.channelTypes.includes(c.type)) &&
+        (deps.channelNames === undefined ||
+          deps.channelNames.includes(c.name) ||
+          deps.channelNames.includes(c.id)),
     )) {
     const custom = deps.customMessage;
     const { templateId, message } =

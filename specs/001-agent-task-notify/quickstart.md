@@ -35,7 +35,8 @@ notice history --limit 5
 **Expected/预期结果**:
 1. 飞书群收到一条按默认模板渲染的"任务完成"通知（含任务标识、结束时间、结果状态）。
 2. `notice history` 显示一条 `sent` 状态的通知记录，关联事件 `task-001`（FR-011）。
-3. **再次发送同一 `taskId`**（10 分钟内）：不再收到通知，事件被标记为重复（FR-007 去重，验证 SC-003）。
+3. 旧无键负载再次发送同一 `taskId`（10 分钟内）：不再收到通知，事件被标记为重复（FR-007 去重）。
+4. 008 稳定键负载：同 `taskId` 不同 `eventKey` 各自通知；同稳定 `eventKey` 重复上报只通知一轮，可用 `notice history events` 查看。
 
 ## Scenario B: HTTP Hook Endpoint/场景 B：HTTP 钩子端点
 

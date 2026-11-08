@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { ingestTaskEndEvent } from "../../src/core/event-pipeline.js";
+import { mapCodeBuddyStopPayload } from "../../src/cli/hook.js";
 import type { ChannelAdapter, SendOutcome, SendPayload } from "../../src/channels/adapter.js";
 import { BlobCipher } from "../../src/storage/crypto.js";
 import { InMemorySecretStore } from "../../src/storage/secret-store.js";
@@ -8,11 +9,7 @@ import { openMemoryDatabase } from "../../src/storage/db.js";
 import { ChannelRepository } from "../../src/storage/channel-repository.js";
 import { TemplateRepository } from "../../src/storage/template-repository.js";
 import { seedDefaultTemplates } from "../../src/storage/seed.js";
-import {
-  notificationRecords,
-  taskEvents,
-  type ChannelType,
-} from "../../src/storage/schema.js";
+import { notificationRecords, taskEvents, type ChannelType } from "../../src/storage/schema.js";
 
 /**
  * T031：通知流集成测试（Red 先行）。
@@ -37,7 +34,10 @@ class FakeAdapter implements ChannelAdapter {
 function makeSetup(channelTypes: ChannelType[] = ["feishu", "dingtalk"]) {
   const db = openMemoryDatabase();
   seedDefaultTemplates(db);
-  const channels = new ChannelRepository(db, new BlobCipher(new InMemorySecretStore().getMainKey()));
+  const channels = new ChannelRepository(
+    db,
+    new BlobCipher(new InMemorySecretStore().getMainKey()),
+  );
   const templates = new TemplateRepository(db);
   const adapters = new Map<ChannelType, FakeAdapter>();
   const sendLog: SendPayload[] = [];
@@ -75,7 +75,10 @@ function makeSetup(channelTypes: ChannelType[] = ["feishu", "dingtalk"]) {
         templates,
         getAdapter,
         config: { cooldownMinutes: 10 },
-        dispatchOptions: { maxAttempts: overrides?.maxAttempts ?? 3, retryDelayMs: overrides?.retryDelayMs ?? 1 },
+        dispatchOptions: {
+          maxAttempts: overrides?.maxAttempts ?? 3,
+          retryDelayMs: overrides?.retryDelayMs ?? 1,
+        },
       },
       payload,
     );
@@ -182,10 +185,153 @@ describe("notify flow / 通知流集成（T031）", () => {
         config: { cooldownMinutes: 10 },
         dispatchOptions: { maxAttempts: 1, retryDelayMs: 1 },
       },
-      { schemaVersion: 1, source: "demo", taskId: "sec-1", resultSummary: `部署完成 ${secret}` },
+      {
+        schemaVersion: 1,
+        source: "demo",
+        taskId: "sec-1",
+        eventKey: `key-${secret}`,
+        resultSummary: `部署完成 ${secret}`,
+      },
     );
     const event = db.select().from(taskEvents).get();
     expect(event?.rawPayloadRef).not.toContain(secret);
     expect(event?.rawPayloadRef).toContain("[REDACTED]");
+    expect(event?.eventKey).not.toContain(secret);
+  });
+});
+
+describe("single and multi-step stop flow / 单轮与多步骤 Stop 通知（008 US1）", () => {
+  it("同一会话的单轮与多步骤不同 Stop 各自分发", async () => {
+    const { db, adapters, channels, templates, getAdapter } = makeSetup(["feishu"]);
+    const deps = {
+      db,
+      channels,
+      templates,
+      getAdapter,
+      config: { cooldownMinutes: 10 },
+      dispatchOptions: { maxAttempts: 1, retryDelayMs: 1 },
+    };
+    const single = await ingestTaskEndEvent(
+      deps,
+      {
+        schemaVersion: 1,
+        source: "codebuddy",
+        taskId: "same-current-session",
+        eventKey: "stop-single-turn-001",
+        resultSummary: "虚构单轮问答结束",
+      },
+      { trigger: "hook" },
+    );
+    const multi = await ingestTaskEndEvent(
+      deps,
+      {
+        schemaVersion: 1,
+        source: "codebuddy",
+        taskId: "same-current-session",
+        eventKey: "stop-multi-step-002",
+        result: "failure",
+        resultSummary: "虚构多步骤任务失败",
+      },
+      { trigger: "hook" },
+    );
+    expect(single.deduplicated).toBe(false);
+    expect(multi.deduplicated).toBe(false);
+    expect(single.records).toHaveLength(1);
+    expect(multi.records).toHaveLength(1);
+    const feishu = adapters.get("feishu");
+    expect(feishu?.sends).toHaveLength(2);
+    const events = db.select().from(taskEvents).all();
+    expect(events).toHaveLength(2);
+    expect(new Set(events.map((event) => event.notifyStatus))).toEqual(new Set(["dispatched"]));
+  });
+
+  it("未收到 Stop 不产生事件，来源缺省字段仍受理并分发", async () => {
+    const { db, channels, templates, getAdapter } = makeSetup(["feishu"]);
+    const eventsBefore = db.select().from(taskEvents).all().length;
+    const mapped = mapCodeBuddyStopPayload({
+      event_id: "fixture-stop-minimal-001",
+    });
+    if (mapped.status !== "mapped") {
+      throw new Error("来源映射应成功");
+    }
+    const result = await ingestTaskEndEvent(
+      {
+        db,
+        channels,
+        templates,
+        getAdapter,
+        config: { cooldownMinutes: 10 },
+        dispatchOptions: { maxAttempts: 1, retryDelayMs: 1 },
+      },
+      mapped.payload,
+      { trigger: "hook" },
+    );
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]?.status).toBe("sent");
+    const events = db.select().from(taskEvents).all();
+    expect(events).toHaveLength(eventsBefore + 1);
+    expect(events.at(-1)?.resultStatus).toBe("success");
+  });
+});
+
+describe("stop event identity flow / Stop 事件身份流（008 US2）", () => {
+  it("同一稳定键并发重复十次只产生一轮通知，重复历史可见", async () => {
+    const { db, adapters, channels, templates, getAdapter } = makeSetup(["feishu"]);
+    const deps = {
+      db,
+      channels,
+      templates,
+      getAdapter,
+      config: { cooldownMinutes: 10 },
+      dispatchOptions: { maxAttempts: 1, retryDelayMs: 1 },
+    };
+    const payload = {
+      schemaVersion: 1,
+      source: "codebuddy",
+      taskId: "session-dedup",
+      eventKey: "stop-same-001",
+      resultSummary: "虚构单轮问答结束",
+    };
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => ingestTaskEndEvent(deps, payload, { trigger: "hook" })),
+    );
+    expect(results.filter((result) => result.deduplicated)).toHaveLength(9);
+    const feishu = adapters.get("feishu");
+    expect(feishu?.sends).toHaveLength(1);
+    const events = db.select().from(taskEvents).all();
+    expect(events).toHaveLength(10);
+    expect(events.filter((event) => event.notifyStatus === "duplicated")).toHaveLength(9);
+    const records = db.select().from(notificationRecords).all();
+    expect(records).toHaveLength(1);
+  });
+
+  it("同一会话三个不同稳定键产生三轮通知", async () => {
+    const { db, adapters, channels, templates, getAdapter } = makeSetup(["feishu"]);
+    const deps = {
+      db,
+      channels,
+      templates,
+      getAdapter,
+      config: { cooldownMinutes: 10 },
+      dispatchOptions: { maxAttempts: 1, retryDelayMs: 1 },
+    };
+    for (const [index, eventKey] of ["stop-a", "stop-b", "stop-c"].entries()) {
+      const result = await ingestTaskEndEvent(
+        deps,
+        {
+          schemaVersion: 1,
+          source: "codebuddy",
+          taskId: "session-three-stops",
+          eventKey,
+          resultSummary: `虚构第 ${index + 1} 次问答结束`,
+        },
+        { trigger: "hook" },
+      );
+      expect(result.deduplicated).toBe(false);
+      expect(result.records).toHaveLength(1);
+    }
+    const feishu = adapters.get("feishu");
+    expect(feishu?.sends).toHaveLength(3);
+    expect(db.select().from(taskEvents).all()).toHaveLength(3);
   });
 });

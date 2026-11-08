@@ -16,8 +16,9 @@
 
 | 目标字段 | CodeBuddy Stop（stdin JSON） | Codex notify（argv JSON） |
 |----------|------------------------------|---------------------------|
-| task_id | `session_id` | `thread-id` |
-| source_agent | 固定 `codebuddy`（CLI `--source` 指定） | 固定 `codex-cli` |
+| task_id | `session_id`；缺失时为 `unknown-session` | `thread-id`；缺失时为 `unknown-session` |
+| event_key | 可选 `eventKey`；否则取 stop/event ID 或终态记录稳定身份的散列 | 可选 `eventKey`；否则取 turn/event ID 或 `turn_complete` 稳定身份的散列 |
+| source_agent | `codebuddy` 或 `claude-code`（CLI `--source` 显式指定） | 固定 `codex-cli` |
 | result_status | 可判定时从会话记录尾部推断，否则默认 `completed` | 默认 `completed`（`agent-turn-complete` 仅表示完成） |
 | finished_at | 接收时刻（负载无时间字段时） | 接收时刻 |
 | result_summary | 可选；缺失时默认文案 | `last-assistant-message`（截断至模板长度上限） |
@@ -38,9 +39,11 @@
 
 ## Dedup/去重
 
-- 去重键 = `source_agent` + `task_id`，跨触发源（hook/polling/mcp）复用现有 `dedup.cooldownMinutes` 冷却窗口（FR-004）。
-- 同一 Codex 会话被 notify 钩子与巡检同时捕获时，以先到者为准，后到者被去重吞掉。
+- 008 起有稳定 `event_key` 的 Stop 按 `source_agent + task_id + event_key` 在本地保留期内判重；同一会话不同 Stop 不合并。
+- 旧无键调用继续按 `source_agent + task_id` 和 `dedup.cooldownMinutes` 冷却去重，两类事件互不抑制。
+- 无稳定事件身份的来源按新 Stop 降级受理并提示；不宣称可精确识别其后续重报。
 
 ## History/通知历史
 
-- 复用现有历史表与 `notice history` 查询，记录 `source_agent` 与 `trigger`（FR-006），无 schema 变更、无数据迁移。
+- 复用现有历史表与 `notice history` 查询，记录 `source_agent` 与 `trigger`（FR-006）。
+- 008 新增 `notice history events` 查看 `received/duplicated/dispatched` 事件状态；事件键仅展示不可逆短摘要。

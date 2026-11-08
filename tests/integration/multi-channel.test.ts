@@ -1,18 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach } from "vitest";
 import { runCli } from "../../src/cli/index.js";
 import { ingestTaskEndEvent } from "../../src/core/event-pipeline.js";
 import type { ChannelAdapter, SendOutcome, SendPayload } from "../../src/channels/adapter.js";
 import { BlobCipher } from "../../src/storage/crypto.js";
 import { InMemorySecretStore } from "../../src/storage/secret-store.js";
-import { openMemoryDatabase } from "../../src/storage/db.js";
+import { openMemoryDatabase, openFileDatabase } from "../../src/storage/db.js";
 import { ChannelRepository } from "../../src/storage/channel-repository.js";
 import { TemplateRepository } from "../../src/storage/template-repository.js";
 import { seedDefaultTemplates } from "../../src/storage/seed.js";
-import { notificationRecords, type ChannelType } from "../../src/storage/schema.js";
+import {
+  notificationChannels,
+  notificationRecords,
+  type ChannelType,
+} from "../../src/storage/schema.js";
 
 /**
  * 004-T007：同类型多条配置行为测试（US2）。
@@ -186,7 +191,7 @@ function makePipelineSetup() {
     taskId: "task-multi",
     result: "success",
   };
-  const ingest = (respond: (call: number) => SendOutcome) => {
+  const ingest = (respond: (call: number) => SendOutcome, notifyChannels?: string[]) => {
     // 共享适配器实例：两次 send 调用共用同一计数器（feishu-a 先、feishu-b 后）
     const adapter = new QueueAdapter(respond);
     return ingestTaskEndEvent(
@@ -195,7 +200,7 @@ function makePipelineSetup() {
         channels,
         templates,
         getAdapter: () => adapter,
-        config: { cooldownMinutes: 10 },
+        config: { cooldownMinutes: 10, channels: notifyChannels },
         dispatchOptions: { maxAttempts: 1, retryDelayMs: 1 },
       },
       payload,
@@ -232,5 +237,186 @@ describe("same-type multi-config dispatch/同类型多条分发（US2，FR-011�
     const failed = records.find((r) => r.status === "failed")!;
     expect(failed.lastErrorCode).toBe("NETWORK_UNREACHABLE");
     void result;
+  });
+});
+
+describe("notify.channels 指定渠道分发/按配置过滤（US2）", () => {
+  it("config.channels 指定单个渠道时仅该渠道收到通知", async () => {
+    const { db, ingest } = makePipelineSetup();
+    const result = await ingest(() => ({ ok: true }), ["feishu-b"]);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]!.channelName).toBe("feishu-b");
+    const records = db.select().from(notificationRecords).all();
+    expect(records).toHaveLength(1);
+  });
+
+  it("config.channels 指定多个渠道时仅命中渠道收到通知", async () => {
+    const { ingest } = makePipelineSetup();
+    const result = await ingest(() => ({ ok: true }), ["feishu-a", "feishu-b"]);
+    expect(result.records.map((r) => r.channelName).sort()).toEqual(["feishu-a", "feishu-b"]);
+  });
+
+  it("config.channels 含未匹配名称时仅命中部分渠道", async () => {
+    const { ingest } = makePipelineSetup();
+    const result = await ingest(() => ({ ok: true }), ["feishu-a", "不存在的渠道"]);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]!.channelName).toBe("feishu-a");
+  });
+
+  it("config.channels 为空数组时全量分发（向后兼容）", async () => {
+    const { ingest } = makePipelineSetup();
+    const result = await ingest(() => ({ ok: true }), []);
+    expect(result.records).toHaveLength(2);
+  });
+});
+
+// ── Part C：hook --channels 命令行覆盖（settings.json 直接指定渠道场景）──
+
+describe("hook --channels CLI 覆盖/命令行指定渠道", () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "notice-hook-channels-"));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  function cli(argv: string[], stdin?: Readable) {
+    let out = "";
+    let errOut = "";
+    return runCli(argv, {
+      dataDir,
+      stdin,
+      out: (s) => {
+        out += s;
+      },
+      err: (s) => {
+        errOut += s;
+      },
+    }).then((code) => ({ code, out, errOut }));
+  }
+
+  async function recordChannelNames(): Promise<string[]> {
+    const db = openFileDatabase(join(dataDir, "notice.db"));
+    try {
+      const channels = new Map(
+        db.select().from(notificationChannels).all().map((c) => [c.id, c.name]),
+      );
+      return db
+        .select()
+        .from(notificationRecords)
+        .all()
+        .map((r) => channels.get(r.channelId ?? "") ?? "(unknown)");
+    } finally {
+      db.$client.close();
+    }
+  }
+
+  it("--channels 指定单渠道时仅该渠道产生通知记录（优先于 config.json）", async () => {
+    await cli(["channel", "add", "dingtalk", "--name", "ch-a", "--webhook-url", WEBHOOK]);
+    await cli(["channel", "add", "dingtalk", "--name", "ch-b", "--webhook-url", OTHER_HOOK]);
+    await cli(["channel", "enable", "ch-a"]);
+    await cli(["channel", "enable", "ch-b"]);
+    // 写入 config.json 指向 ch-b，验证命令行 --channels ch-a 优先
+    writeFileSync(
+      join(dataDir, "config.json"),
+      JSON.stringify({ notify: { channels: ["ch-b"] } }),
+      "utf8",
+    );
+    const r = await cli(
+      ["hook", "--source", "codebuddy", "--channels", "ch-a"],
+      Readable.from([
+        Buffer.from(
+          JSON.stringify({ session_id: "fixture-channels-0001", result: "success" }),
+        ),
+      ]),
+    );
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("1 渠道");
+    expect(await recordChannelNames()).toEqual(["ch-a"]);
+  });
+
+  it("--channels 未提供时回落 config.json 的 notify.channels", async () => {
+    await cli(["channel", "add", "dingtalk", "--name", "ch-a", "--webhook-url", WEBHOOK]);
+    await cli(["channel", "add", "dingtalk", "--name", "ch-b", "--webhook-url", OTHER_HOOK]);
+    await cli(["channel", "enable", "ch-a"]);
+    await cli(["channel", "enable", "ch-b"]);
+    writeFileSync(
+      join(dataDir, "config.json"),
+      JSON.stringify({ notify: { channels: ["ch-b"] } }),
+      "utf8",
+    );
+    const r = await cli(
+      ["hook", "--source", "codebuddy"],
+      Readable.from([
+        Buffer.from(
+          JSON.stringify({ session_id: "fixture-channels-0002", result: "success" }),
+        ),
+      ]),
+    );
+    expect(r.code).toBe(0);
+    expect(await recordChannelNames()).toEqual(["ch-b"]);
+  });
+
+  it("--channels 重复参数指定多渠道时各渠道均产生记录", async () => {
+    await cli(["channel", "add", "dingtalk", "--name", "ch-a", "--webhook-url", WEBHOOK]);
+    await cli(["channel", "add", "dingtalk", "--name", "ch-b", "--webhook-url", OTHER_HOOK]);
+    await cli(["channel", "enable", "ch-a"]);
+    await cli(["channel", "enable", "ch-b"]);
+    const r = await cli(
+      ["hook", "--source", "codebuddy", "--channels", "ch-a", "--channels", "ch-b"],
+      Readable.from([
+        Buffer.from(
+          JSON.stringify({ session_id: "fixture-channels-0004", result: "success" }),
+        ),
+      ]),
+    );
+    expect(r.code).toBe(0);
+    expect(await recordChannelNames().then((n) => n.sort())).toEqual(["ch-a", "ch-b"]);
+  });
+
+  it("--channels 值含残留引号时剥离后匹配（跨 shell 传参健壮性）", async () => {
+    await cli(["channel", "add", "dingtalk", "--name", "ch-a", "--webhook-url", WEBHOOK]);
+    await cli(["channel", "enable", "ch-a"]);
+    const r = await cli(
+      ["hook", "--source", "codebuddy", "--channels", '"ch-a"'],
+      Readable.from([
+        Buffer.from(
+          JSON.stringify({ session_id: "fixture-channels-0005", result: "success" }),
+        ),
+      ]),
+    );
+    expect(r.code).toBe(0);
+    expect(await recordChannelNames()).toEqual(["ch-a"]);
+  });
+
+  it("--channels 空格分隔多渠道时各渠道均产生记录（PowerShell 逗号转空格场景）", async () => {
+    await cli(["channel", "add", "dingtalk", "--name", "ch-a", "--webhook-url", WEBHOOK]);
+    await cli(["channel", "add", "dingtalk", "--name", "ch-b", "--webhook-url", OTHER_HOOK]);
+    await cli(["channel", "enable", "ch-a"]);
+    await cli(["channel", "enable", "ch-b"]);
+    const r = await cli(
+      ["hook", "--source", "codebuddy", "--channels", "ch-a ch-b"],
+      Readable.from([
+        Buffer.from(
+          JSON.stringify({ session_id: "fixture-channels-0006", result: "success" }),
+        ),
+      ]),
+    );
+    expect(r.code).toBe(0);
+    expect(await recordChannelNames().then((n) => n.sort())).toEqual(["ch-a", "ch-b"]);
+  });
+
+  it("--channels 仅有分隔符 → 退出码 2 且错误信息含 --channels", async () => {
+    const r = await cli(
+      ["hook", "--source", "codebuddy", "--channels", " , "],
+      Readable.from([
+        Buffer.from(
+          JSON.stringify({ session_id: "fixture-channels-0003", result: "success" }),
+        ),
+      ]),
+    );
+    expect(r.code).toBe(2);
+    expect(r.errOut).toContain("--channels");
   });
 });

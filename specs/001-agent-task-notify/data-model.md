@@ -29,7 +29,8 @@
 | --- | --- | --- |
 | `id` | 事件唯一标识 | 系统生成 |
 | `source_agent` | 来源智能体标识 | 非空（如 `claude-code`、`generic:my-agent`） |
-| `task_id` | 任务标识 | 非空，来源侧提供 |
+| `task_id` | 任务/会话标识 | 非空，来源侧提供 |
+| `event_key` | 008 增加的稳定停止事件身份 | 可空；旧无键行保持 NULL，持久化为不透明标识或散列 |
 | `finished_at` | 任务结束时间 | ISO 8601；缺省取接收时间 |
 | `result_status` | 任务结果 | 枚举：`success` / `failure` / `interrupted` / `unknown` |
 | `trigger_type` | 触发方式 | 枚举：`hook` / `polling` / `mcp` |
@@ -39,7 +40,7 @@
 
 **Validation Rules/校验规则**（源自 FR-001/FR-002/FR-010）: 输入负载经 JSON Schema 校验（长度上限、字段类型、枚举），非法即拒绝并返回明确原因（FR-013）。
 
-**Deduplication/去重**（源自 FR-007，见 research.md R8）: 入库前按 `(source_agent, task_id)` + `received_at` 冷却窗口（默认 10 分钟，可配）查询；命中即标记为重复：保留事件记录（`trigger_type` 可补充），**不**再触发通知。
+**Deduplication/去重**（源自 FR-007，见 research.md R8；008 更新）: 有 `event_key` 的 Stop 按 `(source_agent, task_id, event_key)` 在本地保留历史内判重；旧无键调用继续按 `(source_agent, task_id)` + `received_at` 冷却窗口（默认 10 分钟，可配）查询。命中即标记为重复：保留事件记录，**不**再触发通知。
 
 **State Transitions/状态迁移**:
 `received（已接收） → duplicated（判定为重复，仅记录）`；`received → dispatched（已产生通知记录）`。终态不可逆。

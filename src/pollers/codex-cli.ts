@@ -7,6 +7,7 @@ import {
   type AgentTask,
   type AgentTaskStatus,
 } from "./adapter.js";
+import { createStableEventKey } from "../core/stop-identity.js";
 
 /**
  * Codex CLI 会话巡查适配器（005-US3，contracts/dialog-source-integration.md）：
@@ -24,6 +25,8 @@ interface CodexTailLine {
     type?: unknown;
     status?: unknown;
     message?: unknown;
+    turn_id?: unknown;
+    "turn-id"?: unknown;
   };
 }
 
@@ -94,7 +97,10 @@ export class CodexCliAdapter implements AgentStatusAdapter {
         `无法读取会话文件 ${file}：${cause instanceof Error ? cause.message : String(cause)}`,
       );
     }
-    const lines = tail.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    const lines = tail
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
     if (lines.length === 0) {
       throw new AgentStatusError(`codex-cli 会话文件为空：${file}`);
     }
@@ -102,8 +108,8 @@ export class CodexCliAdapter implements AgentStatusAdapter {
     let taskId = fallbackTaskId;
     let parsedAny = false;
     let lastSummary: string | undefined;
-    let finished: { status: AgentTaskStatus; at?: Date } | undefined;
-    for (const line of lines) {
+    let finished: { status: AgentTaskStatus; at?: Date; eventKey?: string } | undefined;
+    for (const [index, line] of lines.entries()) {
       let obj: CodexTailLine;
       try {
         obj = JSON.parse(line) as CodexTailLine;
@@ -125,7 +131,18 @@ export class CodexCliAdapter implements AgentStatusAdapter {
           typeof obj.timestamp === "string" && !Number.isNaN(Date.parse(obj.timestamp))
             ? new Date(obj.timestamp)
             : undefined;
-        finished = { status, at };
+        const turnId =
+          typeof payload["turn-id"] === "string"
+            ? payload["turn-id"]
+            : typeof payload.turn_id === "string"
+              ? payload.turn_id
+              : undefined;
+        const stableId = turnId ?? at?.toISOString() ?? `line:${index}`;
+        finished = {
+          status,
+          at,
+          eventKey: createStableEventKey(`${this.sourceAgent}:${taskId}:${stableId}`),
+        };
       }
     }
     if (!parsedAny) {
@@ -136,6 +153,7 @@ export class CodexCliAdapter implements AgentStatusAdapter {
         {
           taskId,
           status: finished.status,
+          eventKey: finished.eventKey,
           finishedAt: finished.at,
           summary: lastSummary,
         },

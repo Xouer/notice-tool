@@ -33,7 +33,7 @@ class FakeAdapter implements ChannelAdapter {
     readonly type: ChannelType,
     private readonly respond: () => SendOutcome,
   ) {}
-  async   send(payload: SendPayload, _credentials: Record<string, unknown>): Promise<SendOutcome> {
+  async send(payload: SendPayload, _credentials: Record<string, unknown>): Promise<SendOutcome> {
     this.sends.push(payload);
     return this.respond();
   }
@@ -74,7 +74,11 @@ describe("codex notify flow / Codex notify 端到端（T010，US2）", () => {
     const cipher = new BlobCipher(new InMemorySecretStore().getMainKey());
     const channels = new ChannelRepository(db, cipher);
     const templates = new TemplateRepository(db);
-    const row = channels.create({ type: "feishu", name: "假飞书", credentials: { webhookUrl: "https://x.example/hook" } });
+    const row = channels.create({
+      type: "feishu",
+      name: "假飞书",
+      credentials: { webhookUrl: "https://x.example/hook" },
+    });
     channels.setEnabled(row.id, true);
     const fake = new FakeAdapter("feishu", () => ({ ok: true }));
 
@@ -116,7 +120,11 @@ describe("codex notify flow / Codex notify 端到端（T010，US2）", () => {
     const cipher = new BlobCipher(new InMemorySecretStore().getMainKey());
     const channels = new ChannelRepository(db, cipher);
     const templates = new TemplateRepository(db);
-    const row = channels.create({ type: "feishu", name: "假飞书-2", credentials: { webhookUrl: "https://x.example/hook" } });
+    const row = channels.create({
+      type: "feishu",
+      name: "假飞书-2",
+      credentials: { webhookUrl: "https://x.example/hook" },
+    });
     channels.setEnabled(row.id, true);
     const fake = new FakeAdapter("feishu", () => ({ ok: true }));
 
@@ -144,6 +152,53 @@ describe("codex notify flow / Codex notify 端到端（T010，US2）", () => {
     expect(fake.sends[0]?.message).not.toContain(secret);
     const event = db.select().from(taskEvents).get();
     expect(event?.rawPayloadRef).not.toContain(secret);
+    db.$client.close();
+  });
+
+  it("新 turn 独立通知，同一 turn 跨 notify/polling 仅一轮", async () => {
+    const db = openFileDatabase(":memory:");
+    seedDefaultTemplates(db);
+    const cipher = new BlobCipher(new InMemorySecretStore().getMainKey());
+    const channels = new ChannelRepository(db, cipher);
+    const templates = new TemplateRepository(db);
+    const row = channels.create({
+      type: "feishu",
+      name: "假飞书-3",
+      credentials: { webhookUrl: "https://x.example/hook" },
+    });
+    channels.setEnabled(row.id, true);
+    const fake = new FakeAdapter("feishu", () => ({ ok: true }));
+    const deps = {
+      db,
+      channels,
+      templates,
+      getAdapter: (): ChannelAdapter => fake,
+      config: { cooldownMinutes: 10 },
+      dispatchOptions: { maxAttempts: 1, retryDelayMs: 1 },
+    };
+    const makePayload = (turnId: string) =>
+      mapCodexNotifyPayload({
+        ...codexFixture,
+        "thread-id": "fixture-thread-codex-turns",
+        "turn-id": turnId,
+      });
+    const turnOne = makePayload("fixture-turn-codex-0001");
+    const turnTwo = makePayload("fixture-turn-codex-0002");
+    if (turnOne.status !== "mapped" || turnTwo.status !== "mapped") {
+      throw new Error("Codex 映射应成功");
+    }
+    expect(turnOne.payload.eventKey).not.toBe(turnTwo.payload.eventKey);
+
+    const first = await ingestTaskEndEvent(deps, turnOne.payload, { trigger: "hook" });
+    const sameTurnPolling = await ingestTaskEndEvent(deps, turnOne.payload, { trigger: "polling" });
+    const second = await ingestTaskEndEvent(deps, turnTwo.payload, { trigger: "polling" });
+    expect(first.deduplicated).toBe(false);
+    expect(sameTurnPolling.deduplicated).toBe(true);
+    expect(second.deduplicated).toBe(false);
+    expect(fake.sends).toHaveLength(2);
+    const events = db.select().from(taskEvents).all();
+    expect(events).toHaveLength(3);
+    expect(events.filter((event) => event.notifyStatus === "duplicated")).toHaveLength(1);
     db.$client.close();
   });
 });

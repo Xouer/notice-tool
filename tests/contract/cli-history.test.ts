@@ -68,9 +68,20 @@ describe("CLI history / 通知历史契约（T045）", () => {
 
   it("hook 触发后 history 可见 sent 记录且无明文凭据", async () => {
     const port = await listenHttp(200);
-    await cli(["channel", "add", "feishu", "--name", "群", "--webhook-url", `http://127.0.0.1:${port}/hook/abc123def456`]);
+    await cli([
+      "channel",
+      "add",
+      "feishu",
+      "--name",
+      "群",
+      "--webhook-url",
+      `http://127.0.0.1:${port}/hook/abc123def456`,
+    ]);
     await cli(["channel", "enable", "群"]);
-    await cli(["hook"], Buffer.from(JSON.stringify({ schemaVersion: 1, source: "demo", taskId: "h1" })));
+    await cli(
+      ["hook"],
+      Buffer.from(JSON.stringify({ schemaVersion: 1, source: "demo", taskId: "h1" })),
+    );
     const { code, out } = await cli(["history", "--json"]);
     expect(code).toBe(0);
     const parsed = JSON.parse(out.trim()) as {
@@ -95,9 +106,20 @@ describe("CLI history / 通知历史契约（T045）", () => {
         resolve(typeof addr === "object" && addr !== null ? addr.port : 0);
       });
     });
-    await cli(["channel", "add", "feishu", "--name", "群", "--webhook-url", `http://127.0.0.1:${port}/hook/x`]);
+    await cli([
+      "channel",
+      "add",
+      "feishu",
+      "--name",
+      "群",
+      "--webhook-url",
+      `http://127.0.0.1:${port}/hook/x`,
+    ]);
     await cli(["channel", "enable", "群"]);
-    await cli(["hook"], Buffer.from(JSON.stringify({ schemaVersion: 1, source: "demo", taskId: "h2" })));
+    await cli(
+      ["hook"],
+      Buffer.from(JSON.stringify({ schemaVersion: 1, source: "demo", taskId: "h2" })),
+    );
     const failed = JSON.parse(
       (await cli(["history", "--status", "failed", "--json"])).out.trim(),
     ) as { records: Array<{ id: string; status: string }> };
@@ -106,9 +128,9 @@ describe("CLI history / 通知历史契约（T045）", () => {
     statusCode = 200;
     const { code } = await cli(["history", "resend", failed.records[0]?.id ?? ""]);
     expect(code).toBe(0);
-    const after = JSON.parse(
-      (await cli(["history", "--json"])).out.trim(),
-    ) as { records: Array<{ id: string; status: string }> };
+    const after = JSON.parse((await cli(["history", "--json"])).out.trim()) as {
+      records: Array<{ id: string; status: string }>;
+    };
     expect(after.records[0]?.status).toBe("sent");
     server.close();
   });
@@ -125,5 +147,86 @@ describe("CLI history / 通知历史契约（T045）", () => {
     );
     expect(code).toBe(0);
     expect(out).toContain("无可用渠道");
+  });
+});
+
+describe("CLI event history / 事件历史契约（008 US2）", () => {
+  it("events 空列表使用 events 顶层结构", async () => {
+    const { code, out } = await cli(["history", "events", "--json"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out.trim())).toEqual({ events: [] });
+  });
+
+  it("received 与 duplicated 事件可见且可过滤", async () => {
+    const first = {
+      schemaVersion: 1,
+      source: "demo",
+      taskId: "events-1",
+      eventKey: "stop-events-1",
+    };
+    const second = {
+      schemaVersion: 1,
+      source: "demo",
+      taskId: "events-2",
+      eventKey: "stop-events-2",
+    };
+    await cli(["hook"], Buffer.from(JSON.stringify(first)));
+    await cli(["hook"], Buffer.from(JSON.stringify(second)));
+    await cli(["hook"], Buffer.from(JSON.stringify(second)));
+    const all = JSON.parse((await cli(["history", "events", "--json"])).out.trim()) as {
+      events: Array<{ taskId: string; status: string }>;
+    };
+    expect(all.events).toHaveLength(3);
+    expect(all.events.filter((event) => event.status === "received")).toHaveLength(2);
+    expect(all.events.filter((event) => event.status === "duplicated")).toHaveLength(1);
+    const duplicated = JSON.parse(
+      (await cli(["history", "events", "--status", "duplicated", "--json"])).out.trim(),
+    ) as { events: Array<{ taskId: string }> };
+    expect(duplicated.events).toHaveLength(1);
+    expect(duplicated.events[0]?.taskId).toBe("events-2");
+  });
+
+  it("events 不输出完整敏感事件键或路径", async () => {
+    const sensitiveKey = "sk-event-key-very-secret-0123456789";
+    await cli(
+      ["hook"],
+      Buffer.from(
+        JSON.stringify({
+          schemaVersion: 1,
+          source: "demo",
+          taskId: "security-events",
+          eventKey: sensitiveKey,
+          resultSummary: "C:\\Users\\secret\\transcript.jsonl 部署完成",
+        }),
+      ),
+    );
+    const { code, out } = await cli(["history", "events", "--json"]);
+    expect(code).toBe(0);
+    expect(out).not.toContain(sensitiveKey);
+    expect(out).not.toContain("C:\\Users\\secret\\transcript.jsonl");
+    const parsed = JSON.parse(out.trim()) as { events: Array<{ eventKeySummary: string }> };
+    expect(parsed.events[0]?.eventKeySummary.length).toBeLessThanOrEqual(13);
+  });
+
+  it("limit 与非法状态过滤", async () => {
+    for (const index of [1, 2, 3]) {
+      await cli(
+        ["hook"],
+        Buffer.from(
+          JSON.stringify({
+            schemaVersion: 1,
+            source: "demo",
+            taskId: `limit-${index}`,
+            eventKey: `stop-limit-${index}`,
+          }),
+        ),
+      );
+    }
+    const limited = JSON.parse(
+      (await cli(["history", "events", "--limit", "2", "--json"])).out.trim(),
+    ) as { events: unknown[] };
+    expect(limited.events).toHaveLength(2);
+    const invalid = await cli(["history", "events", "--status", "sent"]);
+    expect(invalid.code).toBe(2);
   });
 });

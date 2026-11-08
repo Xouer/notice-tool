@@ -5,9 +5,13 @@ import {
   notificationRecords,
   taskEvents,
   notificationChannels,
+  NOTIFY_STATUSES,
   RECORD_STATUSES,
   type ErrorCode,
+  type NotifyStatus,
   type RecordStatus,
+  type ResultStatus,
+  type TriggerType,
 } from "../storage/schema.js";
 import { renderTemplate } from "../core/template.js";
 import { getAdapter } from "../channels/index.js";
@@ -24,9 +28,49 @@ export function registerHistoryCommands(
   makeContext: () => CliContext,
   openStore: (ctx: CliContext) => OpenedStore,
 ): void {
-  const history = parent
-    .command("history")
-    .description("查看通知历史（--limit/--status 过滤）");
+  const history = parent.command("history").description("查看通知历史（--limit/--status 过滤）");
+
+  // events 使用独立内部选项名；根入口把公开的 --limit/--status 映射过来，
+  // 避免与父命令同名选项在 Commander 中冲突。
+  history
+    .command("events")
+    .description("查看任务结束事件历史（received/duplicated/dispatched）")
+    .option("--events-limit <n>", "返回条数（默认 20；公开参数 --limit 由根入口映射）", "20")
+    .option("--events-status <status>", "按事件状态过滤（公开参数 --status 由根入口映射）")
+    .action((opts: { eventsLimit: string; eventsStatus?: string }) => {
+      const ctx = makeContext();
+      const limit = Number(opts.eventsLimit);
+      if (!Number.isInteger(limit) || limit < 1) {
+        throw new CliFailure("--limit 必须为正整数", 2);
+      }
+      if (
+        opts.eventsStatus !== undefined &&
+        !(NOTIFY_STATUSES as readonly string[]).includes(opts.eventsStatus)
+      ) {
+        throw new CliFailure(`--status 必须为 ${NOTIFY_STATUSES.join("|")} 之一`, 2);
+      }
+      const store = openStore(ctx);
+      try {
+        const events = listEventHistory(
+          store,
+          limit,
+          opts.eventsStatus as NotifyStatus | undefined,
+        );
+        if (ctx.json) {
+          ctx.out(`${JSON.stringify({ events }, null, 2)}\n`);
+        } else if (events.length === 0) {
+          ctx.out("暂无事件记录。\n");
+        } else {
+          for (const event of events) {
+            ctx.out(
+              `${event.id.slice(0, 8)}\t${event.source}\t${event.taskId}\t${event.eventKeySummary}\t${event.trigger}\t${event.status}\t${event.receivedAt}\n`,
+            );
+          }
+        }
+      } finally {
+        store.close();
+      }
+    });
 
   history
     .option("--limit <n>", "返回条数（默认 20）", "20")
@@ -102,11 +146,49 @@ interface HistoryRow {
   updatedAt: string;
 }
 
-function listHistory(
+interface EventHistoryRow {
+  id: string;
+  source: string;
+  taskId: string;
+  eventKeySummary: string;
+  trigger: TriggerType;
+  result: ResultStatus;
+  status: NotifyStatus;
+  receivedAt: string;
+  finishedAt: string;
+}
+
+function eventKeySummary(eventKey: string | null): string {
+  if (eventKey === null || eventKey === "") return "(无)";
+  return eventKey.length > 12 ? `${eventKey.slice(0, 12)}…` : eventKey;
+}
+
+function listEventHistory(
   store: OpenedStore,
   limit: number,
-  status?: RecordStatus,
-): HistoryRow[] {
+  status?: NotifyStatus,
+): EventHistoryRow[] {
+  return store.db
+    .select()
+    .from(taskEvents)
+    .all()
+    .filter((event) => status === undefined || event.notifyStatus === status)
+    .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())
+    .slice(0, limit)
+    .map((event) => ({
+      id: event.id,
+      source: event.sourceAgent,
+      taskId: event.taskId,
+      eventKeySummary: eventKeySummary(event.eventKey),
+      trigger: event.triggerType,
+      result: event.resultStatus,
+      status: event.notifyStatus,
+      receivedAt: event.receivedAt.toISOString(),
+      finishedAt: event.finishedAt.toISOString(),
+    }));
+}
+
+function listHistory(store: OpenedStore, limit: number, status?: RecordStatus): HistoryRow[] {
   const all = store.db
     .select({
       id: notificationRecords.id,
@@ -163,8 +245,7 @@ async function resendRecord(
   if (channel === undefined || event === undefined) {
     throw new CliFailure("记录关联的渠道或事件已不存在", 3);
   }
-  const template =
-    record.templateId !== null ? store.templates.get(record.templateId) : undefined;
+  const template = record.templateId !== null ? store.templates.get(record.templateId) : undefined;
   const tpl = template ?? store.templates.findDefault(channel.type);
   const values = {
     task_id: event.taskId,

@@ -1,6 +1,7 @@
 {
   "type": "agent-turn-complete",
   "thread-id": "fixture-thread-codex-0001",
+  "turn-id": "fixture-turn-codex-0001",
   "last-assistant-message": "fixture：已完成虚构任务并修改 2 个文件",
   "input_messages": ["fixture：请修复虚构模块的测试"],
   "cwd": "C:\\fake\\project"

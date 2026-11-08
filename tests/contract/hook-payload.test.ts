@@ -28,7 +28,10 @@ const VALID_PAYLOAD = {
 
 function makeDeps() {
   const db = openMemoryDatabase();
-  const channels = new ChannelRepository(db, new BlobCipher(new InMemorySecretStore().getMainKey()));
+  const channels = new ChannelRepository(
+    db,
+    new BlobCipher(new InMemorySecretStore().getMainKey()),
+  );
   const templates = new TemplateRepository(db);
   return {
     db,
@@ -51,6 +54,28 @@ describe("hook payload validation / 负载校验（T030）", () => {
     expect(event.finishedAt).toBeInstanceOf(Date);
   });
 
+  it("eventKey 可选：未提供时保持旧契约", () => {
+    const event = validateEventPayload(VALID_PAYLOAD);
+    expect(event.eventKey).toBeUndefined();
+  });
+
+  it("eventKey 合法时标准化为不透明散列", () => {
+    const event = validateEventPayload({ ...VALID_PAYLOAD, eventKey: "stop-001" });
+    expect(event.eventKey).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("eventKey 空白、非字符串或超过 512 字符整体拒绝", () => {
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, eventKey: "   " })).toThrow(
+      EventValidationError,
+    );
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, eventKey: 1 })).toThrow(
+      EventValidationError,
+    );
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, eventKey: "k".repeat(513) })).toThrow(
+      EventValidationError,
+    );
+  });
+
   it("缺必填字段（schemaVersion/source/taskId）整体拒绝", () => {
     expect(() => validateEventPayload({ source: "x" })).toThrow(EventValidationError);
     expect(() => validateEventPayload({ ...VALID_PAYLOAD, source: undefined })).toThrow(
@@ -59,12 +84,12 @@ describe("hook payload validation / 负载校验（T030）", () => {
   });
 
   it("长度上限：source ≤64 / taskId ≤256 / resultSummary ≤500", () => {
-    expect(() =>
-      validateEventPayload({ ...VALID_PAYLOAD, source: "s".repeat(65) }),
-    ).toThrow(EventValidationError);
-    expect(() =>
-      validateEventPayload({ ...VALID_PAYLOAD, taskId: "t".repeat(257) }),
-    ).toThrow(EventValidationError);
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, source: "s".repeat(65) })).toThrow(
+      EventValidationError,
+    );
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, taskId: "t".repeat(257) })).toThrow(
+      EventValidationError,
+    );
     expect(() =>
       validateEventPayload({ ...VALID_PAYLOAD, resultSummary: "r".repeat(501) }),
     ).toThrow(EventValidationError);
@@ -80,9 +105,9 @@ describe("hook payload validation / 负载校验（T030）", () => {
   });
 
   it("finishedAt 非 ISO 8601 拒绝", () => {
-    expect(() =>
-      validateEventPayload({ ...VALID_PAYLOAD, finishedAt: "yesterday" }),
-    ).toThrow(EventValidationError);
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, finishedAt: "yesterday" })).toThrow(
+      EventValidationError,
+    );
   });
 
   it("schemaVersion 不匹配拒绝并注明版本", () => {
@@ -217,10 +242,7 @@ describe("CLI hook / stdin 钩子契约（T030）", () => {
 
   it("非法负载 → 退出码 2 且 stderr 输出机器可读错误 JSON", async () => {
     const bad = { schemaVersion: 1, taskId: "t" }; // 缺 source
-    const { code, errOut } = await cli(
-      ["hook"],
-      Readable.from([Buffer.from(JSON.stringify(bad))]),
-    );
+    const { code, errOut } = await cli(["hook"], Readable.from([Buffer.from(JSON.stringify(bad))]));
     expect(code).toBe(2);
     const parsed = JSON.parse(errOut.trim()) as { error: string };
     expect(parsed.error).toBe("VALIDATION_FAILED");
