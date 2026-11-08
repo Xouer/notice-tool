@@ -64,7 +64,13 @@ export function renderForChannel(
   }
   return {
     templateId: null,
-    message: `任务 ${values.task_id}（${values.source_agent}）已结束：${values.result_status}\n${values.result_summary}`,
+    message:
+      `【任务完成通知】\n` +
+      `标题：${values.title}\n` +
+      `任务 ${values.task_id}（${values.source_agent}）已结束\n` +
+      `结果：${values.result_status}\n` +
+      `结束时间：${values.finished_at}\n` +
+      `概要：${values.result_summary}`,
   };
 }
 

@@ -4,6 +4,7 @@ import { EventValidationError } from "../core/event-pipeline.js";
 import { RESULT_STATUSES, type ResultStatus } from "../storage/schema.js";
 import { createIngest } from "./index.js";
 import { resolveStopEventKey } from "../core/stop-identity.js";
+import { readTranscriptTitle } from "../core/transcript-title.js";
 import { CliFailure } from "./cli-failure.js";
 import type { CliContext, OpenedStore } from "./index.js";
 
@@ -25,6 +26,7 @@ export type MappedSourcePayload =
   | { status: "ignored" };
 
 const SUMMARY_MAX_LENGTH = 500;
+const TITLE_MAX_LENGTH = 100;
 
 /**
  * 解析 --channels 收集值（可能重复传入）：逗号/空白均可作分隔符（PowerShell 传参
@@ -108,6 +110,20 @@ export function mapCodeBuddyStopPayload(
   if (summary !== undefined) {
     payload.resultSummary = summary.slice(0, SUMMARY_MAX_LENGTH);
   }
+  let title =
+    optionalNonEmptyString(body.title) ??
+    optionalNonEmptyString(body.conversation_title) ??
+    optionalNonEmptyString(body.session_title);
+  if (title === undefined) {
+    // 负载无标题字段时，从 transcript_path 转录文件提取标题（custom-title/ai-title/topic/首条用户消息）
+    const transcriptPath = optionalNonEmptyString(body.transcript_path);
+    if (transcriptPath !== undefined) {
+      title = readTranscriptTitle(transcriptPath);
+    }
+  }
+  if (title !== undefined) {
+    payload.title = title.slice(0, TITLE_MAX_LENGTH);
+  }
   payload.finishedAt = optionalIsoTime(body.finishedAt) ?? new Date().toISOString();
   return { status: "mapped", payload, degradedKey: identity.degraded ? true : undefined };
 }
@@ -181,6 +197,13 @@ export function mapCodexNotifyPayload(
   const summary = optionalNonEmptyString(body["last-assistant-message"]);
   if (summary !== undefined) {
     payload.resultSummary = summary.slice(0, SUMMARY_MAX_LENGTH);
+  }
+  const title =
+    optionalNonEmptyString(body.title) ??
+    optionalNonEmptyString(body["thread-title"]) ??
+    optionalNonEmptyString(body.thread_title);
+  if (title !== undefined) {
+    payload.title = title.slice(0, TITLE_MAX_LENGTH);
   }
   payload.finishedAt = optionalIsoTime(body.finishedAt) ?? new Date().toISOString();
   return { status: "mapped", payload, degradedKey: identity.degraded ? true : undefined };

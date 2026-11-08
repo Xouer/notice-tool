@@ -5,6 +5,7 @@
 export const TEMPLATE_MAX_LENGTH = 2000;
 
 export const PLACEHOLDERS = [
+  "title",
   "task_id",
   "source_agent",
   "result_status",

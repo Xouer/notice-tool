@@ -12,6 +12,7 @@ import type { TemplateRepository } from "../../storage/template-repository.js";
 import type { ChannelAdapter } from "../../channels/adapter.js";
 import { dispatchEvent } from "../../core/dispatcher.js";
 import { filterSensitiveSummary } from "../../core/sensitive-filter.js";
+import { formatLocalDateTime } from "../../core/notification-content.js";
 
 /**
  * send_notification 工具实现（T056，contracts/mcp-tools.md）：
@@ -117,10 +118,11 @@ export async function sendNotificationImmediate(
     getAdapter: deps.getAdapter,
     eventId,
     values: {
+      title: validated.title ?? "即时通知",
       task_id: "即时通知",
       source_agent: "mcp",
       result_status: "unknown",
-      finished_at: now.toISOString(),
+      finished_at: formatLocalDateTime(now),
       result_summary: validated.message,
     },
     channelTypes: validated.channels,

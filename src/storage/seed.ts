@@ -28,6 +28,16 @@ export class BuiltinTemplateError extends Error {
 
 const DEFAULT_BODY = [
   "【任务完成通知】",
+  "标题：{{title}}",
+  "任务 {{task_id}}（来源 {{source_agent}}）已结束",
+  "结果：{{result_status}}",
+  "结束时间：{{finished_at}}",
+  "概要：{{result_summary}}",
+].join("\n");
+
+/** 009 迁移基准：旧内置默认模板正文（无 {{title}}）。 */
+const OLD_DEFAULT_BODY = [
+  "【任务完成通知】",
   "任务 {{task_id}}（来源 {{source_agent}}）已结束",
   "结果：{{result_status}}",
   "结束时间：{{finished_at}}",
@@ -87,6 +97,16 @@ export function seedDefaultTemplates(db: NoticeDatabase): void {
           createdAt: now,
           updatedAt: now,
         })
+        .run();
+    } else if (
+      // 009：存量旧内置默认模板升级——仅当正文仍等于旧内置正文时替换，用户自定义不被覆盖
+      existing.isBuiltin &&
+      existing.isDefault &&
+      existing.body === OLD_DEFAULT_BODY
+    ) {
+      db.update(notificationTemplates)
+        .set({ body: def.body, updatedAt: now })
+        .where(eq(notificationTemplates.name, def.name))
         .run();
     }
   }

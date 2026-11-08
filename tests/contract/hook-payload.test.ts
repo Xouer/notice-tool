@@ -110,6 +110,32 @@ describe("hook payload validation / 负载校验（T030）", () => {
     );
   });
 
+  it("title 可选：未提供时返回 undefined", () => {
+    const event = validateEventPayload(VALID_PAYLOAD);
+    expect(event.title).toBeUndefined();
+  });
+
+  it("title 合法非空字符串通过且保留原值", () => {
+    const event = validateEventPayload({ ...VALID_PAYLOAD, title: "修复登录页样式问题" });
+    expect(event.title).toBe("修复登录页样式问题");
+  });
+
+  it("title 空白或非字符串拒绝", () => {
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, title: "   " })).toThrow(
+      EventValidationError,
+    );
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, title: 42 })).toThrow(
+      EventValidationError,
+    );
+  });
+
+  it("title 长度 ≤100，超过 100 整体拒绝", () => {
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, title: "t".repeat(101) })).toThrow(
+      EventValidationError,
+    );
+    expect(() => validateEventPayload({ ...VALID_PAYLOAD, title: "t".repeat(100) })).not.toThrow();
+  });
+
   it("schemaVersion 不匹配拒绝并注明版本", () => {
     try {
       validateEventPayload({ ...VALID_PAYLOAD, schemaVersion: 2 });

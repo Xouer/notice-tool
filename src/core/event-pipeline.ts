@@ -18,6 +18,11 @@ import type { ChannelAdapter } from "../channels/adapter.js";
 import { filterSensitiveSummary } from "./sensitive-filter.js";
 import { isDuplicateEvent } from "./dedup.js";
 import { dispatchEvent, type DispatchRecordResult } from "./dispatcher.js";
+import {
+  formatLocalDateTime,
+  summaryFallback,
+  titleFallback,
+} from "./notification-content.js";
 import type { PlaceholderValues } from "./template.js";
 
 /**
@@ -35,6 +40,8 @@ export class EventValidationError extends Error {
 export interface NormalizedEvent {
   source: string;
   taskId: string;
+  /** 009：可选任务标题（来源侧提供），缺失时由管线生成兜底标题。 */
+  title?: string;
   /** 008：可选稳定停止事件身份；无键时沿用旧冷却语义。 */
   eventKey?: string;
   finishedAt: Date;
@@ -109,6 +116,17 @@ export function validateEventPayload(
   const source = requireStringField(body, "source", 64, errors);
   const taskId = requireStringField(body, "taskId", 256, errors);
 
+  let title: string | undefined;
+  if (body.title !== undefined && body.title !== null) {
+    if (typeof body.title !== "string" || body.title.trim().length === 0) {
+      errors.push("字段 title 必须为非空字符串");
+    } else if (body.title.length > 100) {
+      errors.push(`字段 title 长度 ${body.title.length} 超过上限 100`);
+    } else {
+      title = body.title;
+    }
+  }
+
   let eventKey: string | undefined;
   if (body.eventKey !== undefined && body.eventKey !== null) {
     if (typeof body.eventKey !== "string" || body.eventKey.trim().length === 0) {
@@ -170,6 +188,7 @@ export function validateEventPayload(
   return {
     source: source!,
     taskId: taskId!,
+    title,
     eventKey,
     finishedAt,
     result,
@@ -255,11 +274,12 @@ export async function ingestTaskEndEvent(
 
   // 分发
   const values: PlaceholderValues = {
+    title: filterSensitiveSummary(event.title, 100) ?? titleFallback(event.source, event.taskId),
     task_id: event.taskId,
     source_agent: event.source,
     result_status: event.result,
-    finished_at: event.finishedAt.toISOString(),
-    result_summary: sanitizedSummary ?? "",
+    finished_at: formatLocalDateTime(event.finishedAt),
+    result_summary: sanitizedSummary ?? summaryFallback(event.result),
   };
   const records = await dispatchEvent({
     db: deps.db,

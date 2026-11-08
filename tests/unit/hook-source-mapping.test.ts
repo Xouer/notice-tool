@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -323,6 +323,81 @@ describe("Codex notify payload mapping / Codex notify 负载映射（T009，US2�
     if (mapped.status !== "mapped") return;
     const summary = mapped.payload.resultSummary as string;
     expect(summary.length).toBe(500);
+  });
+});
+
+describe("title mapping / 标题字段映射（T006，009-US1）", () => {
+  it("codebuddy：title → conversation_title → session_title 优先级", () => {
+    const viaTitle = mapCodeBuddyStopPayload({ session_id: "s1", title: "标题A" });
+    expect(viaTitle.status === "mapped" && viaTitle.payload.title).toBe("标题A");
+
+    const viaConversation = mapCodeBuddyStopPayload({
+      session_id: "s2",
+      conversation_title: "标题B",
+      session_title: "标题C",
+    });
+    expect(viaConversation.status === "mapped" && viaConversation.payload.title).toBe("标题B");
+
+    const viaSession = mapCodeBuddyStopPayload({ session_id: "s3", session_title: "标题C" });
+    expect(viaSession.status === "mapped" && viaSession.payload.title).toBe("标题C");
+  });
+
+  it("codebuddy：无任何标题字段时不写入 title", () => {
+    const mapped = mapCodeBuddyStopPayload({ session_id: "s4", event_id: "e1" });
+    expect(mapped.status).toBe("mapped");
+    if (mapped.status !== "mapped") return;
+    expect(mapped.payload.title).toBeUndefined();
+  });
+
+  it("codebuddy：超长标题截断至 100 字符", () => {
+    const mapped = mapCodeBuddyStopPayload({ session_id: "s5", title: "长".repeat(200) });
+    expect(mapped.status).toBe("mapped");
+    if (mapped.status !== "mapped") return;
+    expect((mapped.payload.title as string).length).toBe(100);
+  });
+
+  it("codex：title → thread-title 优先级", () => {
+    const viaTitle = mapCodexNotifyPayload({ type: "agent-turn-complete", title: "标题A" });
+    expect(viaTitle.status === "mapped" && viaTitle.payload.title).toBe("标题A");
+
+    const viaThread = mapCodexNotifyPayload({
+      type: "agent-turn-complete",
+      "thread-title": "标题B",
+    });
+    expect(viaThread.status === "mapped" && viaThread.payload.title).toBe("标题B");
+  });
+
+  it("codebuddy：负载无标题时从 transcript_path 提取标题", () => {
+    const dir = mkdtempSync(join(tmpdir(), "notice-title-map-"));
+    const transcript = join(dir, "session.jsonl");
+    writeFileSync(
+      transcript,
+      [
+        JSON.stringify({ type: "message", role: "user", content: [{ type: "input_text", text: "帮我修复通知" }] }),
+        JSON.stringify({ type: "topic", topic: "fix task 修复通知格式" }),
+      ].join("\n"),
+      "utf8",
+    );
+    const mapped = mapCodeBuddyStopPayload({
+      session_id: "s-title",
+      event_id: "e-title",
+      transcript_path: transcript,
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(mapped.status).toBe("mapped");
+    if (mapped.status !== "mapped") return;
+    expect(mapped.payload.title).toBe("fix task 修复通知格式");
+  });
+
+  it("codebuddy：transcript_path 不可读时标题回退为 undefined（由管线兜底）", () => {
+    const mapped = mapCodeBuddyStopPayload({
+      session_id: "s-title-missing",
+      event_id: "e-title-missing",
+      transcript_path: "C:\\missing\\no-such-file.jsonl",
+    });
+    expect(mapped.status).toBe("mapped");
+    if (mapped.status !== "mapped") return;
+    expect(mapped.payload.title).toBeUndefined();
   });
 });
 

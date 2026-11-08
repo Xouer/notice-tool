@@ -14,6 +14,11 @@ import {
   type TriggerType,
 } from "../storage/schema.js";
 import { renderTemplate } from "../core/template.js";
+import {
+  formatLocalDateTime,
+  summaryFallback,
+  titleFallback,
+} from "../core/notification-content.js";
 import { getAdapter } from "../channels/index.js";
 import { CliFailure } from "./cli-failure.js";
 import type { OpenedStore, CliContext } from "./index.js";
@@ -248,16 +253,17 @@ async function resendRecord(
   const template = record.templateId !== null ? store.templates.get(record.templateId) : undefined;
   const tpl = template ?? store.templates.findDefault(channel.type);
   const values = {
+    title: titleFallback(event.sourceAgent, event.taskId),
     task_id: event.taskId,
     source_agent: event.sourceAgent,
     result_status: event.resultStatus,
-    finished_at: event.finishedAt.toISOString(),
-    result_summary: event.rawPayloadRef ?? "",
+    finished_at: formatLocalDateTime(event.finishedAt),
+    result_summary: event.rawPayloadRef ?? summaryFallback(event.resultStatus),
   };
   const message =
     tpl !== undefined
       ? renderTemplate(tpl.body, values)
-      : `任务 ${event.taskId}（${event.sourceAgent}）已结束：${event.resultStatus}\n${event.rawPayloadRef ?? ""}`;
+      : `【任务完成通知】\n标题：${values.title}\n任务 ${event.taskId}（${event.sourceAgent}）已结束\n结果：${event.resultStatus}\n结束时间：${values.finished_at}\n概要：${values.result_summary}`;
 
   const patchRecord = (patch: {
     status: RecordStatus;

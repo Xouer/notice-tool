@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { openMemoryDatabase } from "../../src/storage/db.js";
 import {
@@ -87,6 +88,7 @@ describe("default template seeding / 默认模板播种（T007）", () => {
     seedDefaultTemplates(db);
     const rows = db.select().from(notificationTemplates).all();
     const allowed = [
+      "{{title}}",
       "{{task_id}}",
       "{{source_agent}}",
       "{{result_status}}",
@@ -99,5 +101,84 @@ describe("default template seeding / 默认模板播种（T007）", () => {
         expect(allowed).toContain(p);
       }
     }
+  });
+});
+
+const OLD_BODY = [
+  "【任务完成通知】",
+  "任务 {{task_id}}（来源 {{source_agent}}）已结束",
+  "结果：{{result_status}}",
+  "结束时间：{{finished_at}}",
+  "概要：{{result_summary}}",
+].join("\n");
+
+describe("default template migration / 默认模板升级（T017）", () => {
+  it("新默认模板含 {{title}} 且结构固定（标题 → 任务 → 结果 → 时间 → 概要）", () => {
+    const db = openMemoryDatabase();
+    seedDefaultTemplates(db);
+    const generic = db
+      .select()
+      .from(notificationTemplates)
+      .where(eq(notificationTemplates.name, "default-generic"))
+      .get();
+    expect(generic).toBeDefined();
+    const lines = generic!.body.split("\n");
+    expect(lines[0]).toBe("【任务完成通知】");
+    expect(lines[1]).toBe("标题：{{title}}");
+    expect(lines[2]).toBe("任务 {{task_id}}（来源 {{source_agent}}）已结束");
+    expect(lines[3]).toBe("结果：{{result_status}}");
+    expect(lines[4]).toBe("结束时间：{{finished_at}}");
+    expect(lines[5]).toBe("概要：{{result_summary}}");
+  });
+
+  it("存量旧内置正文被升级为新正文", () => {
+    const db = openMemoryDatabase();
+    const now = new Date();
+    // 预置一个旧内置默认模板
+    db.insert(notificationTemplates)
+      .values({
+        id: randomUUID(),
+        name: "default-generic",
+        channelType: null,
+        body: OLD_BODY,
+        isDefault: true,
+        isBuiltin: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    seedDefaultTemplates(db);
+    const generic = db
+      .select()
+      .from(notificationTemplates)
+      .where(eq(notificationTemplates.name, "default-generic"))
+      .get();
+    expect(generic!.body).toContain("标题：{{title}}");
+    expect(generic!.body).not.toBe(OLD_BODY);
+  });
+
+  it("用户自定义正文（≠旧内置正文）不被覆盖", () => {
+    const db = openMemoryDatabase();
+    const now = new Date();
+    const custom = "自定义模板 {{task_id}} 完成";
+    db.insert(notificationTemplates)
+      .values({
+        id: randomUUID(),
+        name: "default-generic",
+        channelType: null,
+        body: custom,
+        isDefault: true,
+        isBuiltin: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    seedDefaultTemplates(db);
+    const generic = db
+      .select()
+      .from(notificationTemplates)
+      .where(eq(notificationTemplates.name, "default-generic"))
+      .get();
+    expect(generic!.body).toBe(custom);
   });
 });

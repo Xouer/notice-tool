@@ -46,6 +46,7 @@ const REPORT_TASK_END_SCHEMA = {
     schemaVersion: { type: "integer", description: "负载结构版本，当前 1" },
     source: { type: "string", maxLength: 64, description: "来源智能体标识" },
     taskId: { type: "string", maxLength: 256, description: "任务/会话标识" },
+    title: { type: "string", maxLength: 100, description: "任务标题（可选）" },
     finishedAt: { type: "string", description: "ISO 8601 结束时间（缺省取接收时间）" },
     result: { type: "string", enum: [...RESULT_STATUSES], description: "任务结果" },
     resultSummary: { type: "string", maxLength: 500, description: "结束概要" },

@@ -11,6 +11,7 @@ import {
  * 白名单占位符；未知占位符保存/渲染即报错；正文 ≤ 2000 字符（data-model.md）。
  */
 const VALUES = {
+  title: "修复登录页样式",
   task_id: "task-001",
   source_agent: "claude-code",
   result_status: "success",
@@ -19,8 +20,9 @@ const VALUES = {
 };
 
 describe("template renderer / 模板渲染器（T027）", () => {
-  it("白名单常量恰好五个占位符", () => {
+  it("白名单常量恰好六个占位符（含 title）", () => {
     expect([...PLACEHOLDERS]).toEqual([
+      "title",
       "task_id",
       "source_agent",
       "result_status",
@@ -29,12 +31,12 @@ describe("template renderer / 模板渲染器（T027）", () => {
     ]);
   });
 
-  it("五个白名单占位符全部替换", () => {
+  it("六个白名单占位符全部替换（含 {{title}}）", () => {
     const body =
-      "任务 {{task_id}}（{{source_agent}}）{{result_status}} @ {{finished_at}}：{{result_summary}}";
+      "标题：{{title}}\n任务 {{task_id}}（{{source_agent}}）{{result_status}} @ {{finished_at}}：{{result_summary}}";
     const out = renderTemplate(body, VALUES);
     expect(out).toBe(
-      "任务 task-001（claude-code）success @ 2026-11-07T10:30:00.000Z：修复登录页样式",
+      "标题：修复登录页样式\n任务 task-001（claude-code）success @ 2026-11-07T10:30:00.000Z：修复登录页样式",
     );
     expect(out).not.toContain("{{");
   });
